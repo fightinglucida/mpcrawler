@@ -90,97 +90,154 @@ class DatabaseManager:
                             print(f"REST API确认邮箱失败: {admin_response.text}")
                     except Exception as rest_error:
                         print(f"REST API确认邮箱错误: {str(rest_error)}")
+                else:
+                    pass  # 添加else子句
                 
-                # 创建用户记录 - 尝试使用RPC调用
-                try:
-                    print("尝试使用RPC调用创建用户记录...")
-                    # 方法1: 使用RPC调用
-                    result = self.supabase.rpc(
-                        'create_user_record',
-                        {
-                            'user_id': user_id,
-                            'user_email': email,
-                            'user_nickname': nickname,
-                            'user_mac': mac_address,
-                            'created_at_time': datetime.now().isoformat()
-                        }
-                    ).execute()
-                    
-                    if result.data:
-                        return {'success': True, 'message': '注册成功', 'user_id': user_id}
-                    else:
-                        print(f"RPC调用失败: {result.error}")
-                        
-                        # 方法2: 尝试使用SQL插入
-                        print("尝试使用SQL插入...")
-                        sql = """
-                        INSERT INTO users (id, email, nickname, mac_address, created_at)
-                        VALUES ('{}', '{}', '{}', '{}', '{}')
-                        """.format(
-                            user_id, 
-                            email.replace("'", "''"), 
-                            nickname.replace("'", "''"), 
-                            mac_address.replace("'", "''"),
-                            datetime.now().isoformat()
-                        )
-                        
-                        sql_result = self.supabase.sql(sql).execute()
-                        if not sql_result.error:
-                            return {'success': True, 'message': '注册成功', 'user_id': user_id}
-                        else:
-                            print(f"SQL插入失败: {sql_result.error}")
-                            
-                            # 方法3: 尝试使用REST API
-                            print("尝试使用REST API插入...")
-                            import requests
-                            
-                            # 确保使用service_role密钥
-                            headers = {
-                                "apikey": SUPABASE_KEY,
-                                "Authorization": f"Bearer {SUPABASE_KEY}",
-                                "Content-Type": "application/json",
-                                "Prefer": "return=minimal"
-                            }
-                            
-                            url = f"{SUPABASE_URL}/rest/v1/users"
-                            data = {
-                                'id': user_id,
-                                'email': email,
-                                'nickname': nickname,
-                                'mac_address': mac_address,
-                                'created_at': datetime.now().isoformat()
-                            }
-                            
-                            response = requests.post(url, json=data, headers=headers)
-                            if response.status_code < 300:
-                                return {'success': True, 'message': '注册成功', 'user_id': user_id}
-                            else:
-                                print(f"REST API插入失败: {response.text}")
-                                
-                                # 如果所有方法都失败，删除认证用户
-                                try:
-                                    self.supabase.auth.admin.delete_user(user_id)
-                                except:
-                                    pass
-                                return {'success': False, 'message': '注册失败: 无法创建用户记录，请联系管理员'}
-                
-                except Exception as db_error:
-                    # 如果创建用户记录失败，删除认证用户
+            except Exception as e:
+                print(f"注册用户时发生错误: {str(e)}")
+                # 如果发生错误，尝试清理
+                if 'user_id' in locals():
                     try:
                         self.supabase.auth.admin.delete_user(user_id)
                     except:
                         pass
+                return {'success': False, 'message': f'注册失败: {str(e)}'}
+            else:
+                pass  # 添加else子句
+            
+            # 创建用户记录 - 直接插入
+            user_data = {
+                'id': user_id,
+                'email': email,
+                'nickname': nickname,
+                'mac': mac_address if mac_address else '',
+                'role': '1',  # 默认为普通用户
+                'activation_status': '未激活',
+                'expired_time': (datetime.now() + timedelta(days=30)).isoformat(),
+                'create_time': datetime.now().isoformat(),
+                'update_time': datetime.now().isoformat()
+            }
+            
+            user_result = self.supabase.table('users').insert(user_data).execute()
+            
+            if not user_result.data:
+                # 如果创建用户记录失败，尝试删除认证用户
+                try:
+                    self.supabase.auth.admin.delete_user(user_id)
+                except:
+                    pass
+                return {'success': False, 'message': '创建用户记录失败'}
+            
+            return {
+                'success': True, 
+                'message': '注册成功',
+                'user': user_result.data[0]
+            }
+            
+        except Exception as e:
+            print(f"注册用户时发生错误: {str(e)}")
+            # 如果发生错误，尝试清理
+            if 'user_id' in locals():
+                try:
+                    self.supabase.auth.admin.delete_user(user_id)
+                except:
+                    pass
+            return {'success': False, 'message': f'注册失败: {str(e)}'}
+    
+    def register_user_by_admin(self, email, password, nickname, role='1', expired_time=None):
+        """管理员创建用户
+        
+        Args:
+            email: 用户邮箱
+            password: 用户密码
+            nickname: 用户昵称
+            role: 用户角色，默认为普通用户
+            expired_time: 过期时间，默认为30天后
+            
+        Returns:
+            dict: 注册结果
+        """
+        try:
+            # 先检查邮箱是否已存在于 users 表中
+            existing_user_email = self.supabase.table('users').select('*').eq('email', email).execute()
+            if existing_user_email.data:
+                return {'success': False, 'message': '该邮箱已被注册'}
+            
+            # 检查昵称是否已存在
+            existing_user_nickname = self.supabase.table('users').select('*').eq('nickname', nickname).execute()
+            if existing_user_nickname.data:
+                return {'success': False, 'message': '该昵称已被使用'}
+            
+            # 检查 Auth 系统中是否已存在该用户
+            try:
+                # 尝试通过邮箱查找用户
+                auth_users = self.supabase.auth.admin.list_users()
+                existing_auth_user = None
+                
+                for user in auth_users:
+                    if user.email == email:
+                        existing_auth_user = user
+                        break
+                
+                if existing_auth_user:
+                    # Auth 系统中已存在该用户，但 users 表中不存在
+                    # 直接使用该用户的 ID 创建 users 表记录
+                    user_id = existing_auth_user.id
+                    print(f"Auth 系统中已存在该用户，ID: {user_id}")
+                else:
+                    # 创建用户认证
+                    auth_response = self.supabase.auth.admin.create_user({
+                        'email': email,
+                        'password': password,
+                        'email_confirm': True  # 自动确认邮箱
+                    })
                     
-                    # 输出详细错误信息
-                    error_str = str(db_error)
-                    print(f"数据库错误详情: {error_str}")
-                    return {'success': False, 'message': f'创建用户记录失败: {error_str}'}
+                    if not auth_response.user:
+                        return {'success': False, 'message': '用户认证创建失败'}
                     
+                    # 获取用户ID
+                    user_id = auth_response.user.id
             except Exception as auth_error:
-                return {'success': False, 'message': f'用户认证创建失败: {str(auth_error)}'}
+                print(f"检查或创建 Auth 用户时出错: {str(auth_error)}")
+                return {'success': False, 'message': f'用户认证操作失败: {str(auth_error)}'}
+            
+            # 创建用户记录
+            if not expired_time:
+                expired_time = (datetime.now() + timedelta(days=30)).isoformat()
+            
+            user_data = {
+                'id': user_id,
+                'email': email,
+                'nickname': nickname,
+                'mac': '',
+                'role': role,
+                'activation_status': '未激活',
+                'expired_time': expired_time,
+                'create_time': datetime.now().isoformat(),
+                'update_time': datetime.now().isoformat()
+            }
+            
+            user_result = self.supabase.table('users').insert(user_data).execute()
+            
+            if not user_result.data:
+                # 如果创建用户记录失败，尝试删除认证用户
+                try:
+                    self.supabase.auth.admin.delete_user(user_id)
+                except Exception as auth_error:
+                    print(f"删除认证用户失败: {str(auth_error)}")
+                    # 继续执行，不影响结果
+            
+                return {'success': False, 'message': '创建用户记录失败'}
+            
+            return {
+                'success': True, 
+                'message': '创建用户成功',
+                'user': user_result.data[0]
+            }
                 
         except Exception as e:
-            return {'success': False, 'message': f'注册失败: {str(e)}'}
+            print(f"创建用户时发生错误: {str(e)}")
+            return {'success': False, 'message': f'创建用户失败: {str(e)}'}
     
     def login_user(self, email, password):
         """用户登录
@@ -192,260 +249,407 @@ class DatabaseManager:
         Returns:
             dict: 登录结果
         """
-        # 尝试刷新Supabase客户端，确保连接是最新的
-        self._refresh_supabase_client()
-        
         try:
-            # 登录验证
-            print(f"尝试登录用户: {email}")
-            # 确保邮箱格式正确（去除可能的空格）
-            email = email.strip().lower()
-            print(f"处理后的邮箱: {email}")
+            # 验证用户认证
+            auth_response = self.supabase.auth.sign_in_with_password({
+                'email': email,
+                'password': password
+            })
             
-            # 检查用户是否存在
-            try:
-                users = self.supabase.auth.admin.list_users()
-                user_exists = False
-                for user in users:
-                    if hasattr(user, 'email') and user.email and user.email.lower() == email.lower():
-                        user_exists = True
-                        print(f"用户存在于认证系统中，用户ID: {user.id}")
-                        break
-                
-                if not user_exists:
-                    print(f"用户 {email} 不存在于认证系统中")
-                    return {'success': False, 'message': '该邮箱未注册，请先注册账号'}
-            except Exception as check_error:
-                print(f"检查用户存在性失败: {str(check_error)}")
-                # 继续尝试登录，因为list_users可能没有权限
+            if not auth_response.user:
+                return {'success': False, 'message': '邮箱或密码错误'}
             
-            try:
-                print(f"开始验证登录凭据，邮箱: {email}")
-                # 检查Supabase配置
-                print(f"Supabase URL: {SUPABASE_URL[:20]}...")
-                print(f"Supabase KEY类型: {'service_role' if 'service_role' in SUPABASE_KEY else 'anon'}")
-                
+            # 获取用户ID
+            user_id = auth_response.user.id
+            
+            # 获取用户信息
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not user_result.data:
+                return {'success': False, 'message': '用户数据不存在'}
+            
+            user = user_result.data[0]
+            
+            # 检查用户是否过期
+            if user.get('expired_time'):
                 try:
-                    response = self.supabase.auth.sign_in_with_password({
-                        'email': email,
-                        'password': password
-                    })
-                    print("登录凭据验证成功")
-                except Exception as sign_in_error:
-                    error_msg = str(sign_in_error)
-                    print(f"登录验证详细错误: {error_msg}")
-                    
-                    # 检查是否是JWT过期错误
-                    if "JWT expired" in error_msg or "token is expired" in error_msg:
-                        print("检测到JWT令牌过期错误，尝试重新初始化Supabase客户端...")
-                        # 重新初始化Supabase客户端
-                        self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                        # 重试登录
-                        response = self.supabase.auth.sign_in_with_password({
-                            'email': email,
-                            'password': password
-                        })
-                        print("重新初始化后登录成功")
-                    else:
-                        # 重新抛出异常，让外层捕获
-                        raise
-                
-                # 获取用户信息
-                user_id = response.user.id
-                print(f"登录成功，用户ID: {user_id}")
-                
-                user_data = self.supabase.table('users').select('*').eq('id', user_id).execute()
-                
-                if not user_data.data:
-                    print(f"用户ID {user_id} 在users表中不存在")
-                    # 尝试自动创建用户记录
-                    try:
-                        print("尝试自动创建用户记录...")
-                        user_record = {
-                            'id': user_id,
-                            'email': email,
-                            'nickname': email.split('@')[0],  # 使用邮箱前缀作为默认昵称
-                            'mac_address': self._get_current_mac(),
-                            'created_at': datetime.now().isoformat()
-                        }
-                        
-                        self.supabase.table('users').insert(user_record).execute()
-                        user_data = self.supabase.table('users').select('*').eq('id', user_id).execute()
-                        
-                        if not user_data.data:
-                            return {'success': False, 'message': '用户数据不存在，自动创建失败'}
-                    except Exception as create_error:
-                        print(f"自动创建用户记录失败: {str(create_error)}")
-                        return {'success': False, 'message': '用户数据不存在，请联系管理员'}
-                
-                user = user_data.data[0]
-                print(f"获取到用户数据: {user}")
-                
-                # 检查授权是否过期
-                if user.get('expiry_date'):
-                    expiry_date = datetime.fromisoformat(user['expiry_date'])
+                    expiry_date = datetime.fromisoformat(user['expired_time'])
                     if expiry_date < datetime.now():
-                        print(f"用户授权已过期，过期时间: {expiry_date}")
-                        return {'success': False, 'message': '授权已过期，请续费'}
-                
-                # 检查MAC地址
-                current_mac = self._get_current_mac()
-                if user.get('mac_address') and user['mac_address'] != current_mac:
-                    print(f"MAC地址不匹配，用户MAC: {user['mac_address']}，当前MAC: {current_mac}")
-                    return {'success': False, 'message': '设备不匹配，请联系管理员'}
-                
-                return {
-                    'success': True, 
-                    'message': '登录成功', 
-                    'user': {
-                        'id': user['id'],
-                        'email': user['email'],
-                        'nickname': user['nickname'],
-                        'expiry_date': user.get('expiry_date')
-                    }
-                }
+                        return {'success': False, 'message': '账号已过期，请联系管理员'}
+                except:
+                    pass
             
-            except Exception as auth_error:
-                error_str = str(auth_error)
-                print(f"登录验证失败: {error_str}")
-                
-                # 检查是否是邮箱未验证的错误
-                if "Email not confirmed" in error_str:
-                    # 尝试查找用户并自动确认邮箱
-                    try:
-                        print("检测到邮箱未验证错误，尝试自动确认...")
-                        # 查找用户
-                        users = self.supabase.auth.admin.list_users()
-                        target_user = None
-                        for user in users:
-                            if user.email == email:
-                                target_user = user
-                                break
-                        
-                        if target_user:
-                            # 自动确认邮箱
-                            self.supabase.auth.admin.update_user_by_id(
-                                target_user.id,
-                                {"email_confirm": True}
-                            )
-                            
-                            # 再次尝试登录
-                            print("邮箱已确认，再次尝试登录...")
-                            return self.login_user(email, password)
-                        else:
-                            print(f"未找到邮箱为 {email} 的用户")
-                    except Exception as confirm_error:
-                        print(f"自动确认邮箱失败: {str(confirm_error)}")
-                
-                # 根据错误类型返回不同的错误消息
-                if "Invalid login credentials" in error_str:
-                    print(f"登录凭据无效，详细错误: {error_str}")
-                    
-                    # 尝试查找用户是否存在
-                    try:
-                        users = self.supabase.auth.admin.list_users()
-                        user_exists = False
-                        for user in users:
-                            if user.email.lower() == email.lower():
-                                user_exists = True
-                                print(f"用户存在于认证系统中，用户ID: {user.id}")
-                                break
-                        
-                        if not user_exists:
-                            print(f"用户 {email} 不存在于认证系统中")
-                            return {'success': False, 'message': '该邮箱未注册，请先注册账号'}
-                        else:
-                            # 用户存在但密码错误
-                            return {'success': False, 'message': '密码错误，请确认密码是否正确。如忘记密码，请联系管理员重置'}
-                    except Exception as check_error:
-                        print(f"检查用户存在性失败: {str(check_error)}")
-                        return {'success': False, 'message': '邮箱或密码错误，请确认邮箱拼写和密码是否正确'}
-                elif "Email not confirmed" in error_str:
-                    return {'success': False, 'message': '邮箱未验证，请查收验证邮件或联系管理员'}
-                else:
-                    print(f"未知登录错误: {error_str}")
-                    return {'success': False, 'message': f'登录失败: {error_str}'}
-                
+            # 更新最后登录时间和IP
+            try:
+                self.supabase.table('users').update({
+                    'last_login_time': datetime.now().isoformat(),
+                    'last_login_ip': '127.0.0.1'  # 本地登录，使用本地IP
+                }).eq('id', user_id).execute()
+            except:
+                pass
+            
+            return {
+                'success': True,
+                'message': '登录成功',
+                'user': user
+            }
+            
         except Exception as e:
-            print(f"登录过程中发生异常: {str(e)}")
+            print(f"登录时发生错误: {str(e)}")
             return {'success': False, 'message': f'登录失败: {str(e)}'}
     
-    def activate_user(self, user_id, activation_code):
-        """激活用户账号
+    def is_admin(self, user_id):
+        """检查用户是否是管理员
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            bool: 是否是管理员
+        """
+        try:
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not user_result.data:
+                return False
+            
+            user = user_result.data[0]
+            
+            # 使用邮箱地址判断管理员权限
+            return user.get('role') == '0'  # 0表示管理员
+            
+        except:
+            return False
+    
+    def get_users(self, email=None, nickname=None):
+        """获取用户列表
+        
+        Args:
+            email: 邮箱筛选条件
+            nickname: 昵称筛选条件
+            
+        Returns:
+            dict: 用户列表结果
+        """
+        try:
+            query = self.supabase.table('users').select('*')
+            
+            if email:
+                query = query.ilike('email', f'%{email}%')
+            
+            if nickname:
+                query = query.ilike('nickname', f'%{nickname}%')
+            
+            result = query.execute()
+            
+            return {
+                'success': True,
+                'users': result.data
+            }
+            
+        except Exception as e:
+            print(f"获取用户列表时发生错误: {str(e)}")
+            return {'success': False, 'message': f'获取用户列表失败: {str(e)}'}
+    
+    def get_user_by_id(self, user_id):
+        """根据ID获取用户
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            dict: 用户信息结果
+        """
+        try:
+            result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not result.data:
+                return {'success': False, 'message': '用户不存在'}
+            
+            return {
+                'success': True,
+                'user': result.data[0]
+            }
+            
+        except Exception as e:
+            print(f"获取用户信息时发生错误: {str(e)}")
+            return {'success': False, 'message': f'获取用户信息失败: {str(e)}'}
+    
+    def update_user(self, user_id, nickname=None, password=None, role=None, expired_time=None):
+        """更新用户信息
+        
+        Args:
+            user_id: 用户ID
+            nickname: 新昵称
+            password: 新密码
+            role: 新角色
+            expired_time: 新过期时间
+            
+        Returns:
+            dict: 更新结果
+        """
+        try:
+            # 先检查用户是否存在
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not user_result.data:
+                return {'success': False, 'message': '用户不存在'}
+            
+            # 如果修改昵称，检查昵称是否已存在
+            if nickname and nickname != user_result.data[0].get('nickname'):
+                existing_nickname = self.supabase.table('users').select('*').eq('nickname', nickname).execute()
+                if existing_nickname.data and existing_nickname.data[0].get('id') != user_id:
+                    return {'success': False, 'message': '该昵称已被使用'}
+            
+            # 更新用户数据
+            update_data = {
+                'update_time': datetime.now().isoformat()
+            }
+            
+            if nickname:
+                update_data['nickname'] = nickname
+            
+            if role is not None:
+                update_data['role'] = role
+            
+            if expired_time:
+                update_data['expired_time'] = expired_time
+            
+            # 更新用户表
+            self.supabase.table('users').update(update_data).eq('id', user_id).execute()
+            
+            # 如果需要更新密码
+            if password:
+                try:
+                    self.supabase.auth.admin.update_user_by_id(
+                        user_id,
+                        {"password": password}
+                    )
+                except Exception as pw_error:
+                    print(f"更新密码失败: {str(pw_error)}")
+                    return {'success': False, 'message': f'更新密码失败: {str(pw_error)}'}
+            
+            # 获取更新后的用户信息
+            updated_user = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            return {
+                'success': True,
+                'message': '更新成功',
+                'user': updated_user.data[0] if updated_user.data else None
+            }
+            
+        except Exception as e:
+            print(f"更新用户信息时发生错误: {str(e)}")
+            return {'success': False, 'message': f'更新用户信息失败: {str(e)}'}
+    
+    def delete_user(self, user_id):
+        """删除用户
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            dict: 删除结果
+        """
+        try:
+            # 先检查用户是否存在
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not user_result.data:
+                return {'success': False, 'message': '用户不存在'}
+            
+            # 删除用户表记录
+            self.supabase.table('users').delete().eq('id', user_id).execute()
+            
+            # 删除认证用户
+            try:
+                self.supabase.auth.admin.delete_user(user_id)
+            except Exception as auth_error:
+                print(f"删除认证用户失败: {str(auth_error)}")
+                # 继续执行，不影响结果
+            
+            return {
+                'success': True,
+                'message': '删除成功'
+            }
+            
+        except Exception as e:
+            print(f"删除用户时发生错误: {str(e)}")
+            return {'success': False, 'message': f'删除用户失败: {str(e)}'}
+    
+    def generate_activation_code(self, user_id):
+        """为用户生成激活码
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            dict: 生成结果
+        """
+        try:
+            # 先检查用户是否存在
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+            
+            if not user_result.data:
+                return {'success': False, 'message': '用户不存在'}
+            
+            # 生成激活码
+            activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
+            
+            # 更新用户表
+            self.supabase.table('users').update({
+                'activation_code': activation_code,
+                'activation_status': '未激活',
+                'update_time': datetime.now().isoformat()
+            }).eq('id', user_id).execute()
+            
+            # 创建激活码记录
+            code_data = {
+                'code': activation_code,
+                'user_id': user_id,
+                'duration_days': 30,  # 默认30天有效期
+                'create_time': datetime.now().isoformat(),
+                'used': False
+            }
+            
+            self.supabase.table('activation_codes').insert(code_data).execute()
+            
+            return {
+                'success': True,
+                'message': '激活码生成成功',
+                'code': activation_code
+            }
+            
+        except Exception as e:
+            print(f"生成激活码时发生错误: {str(e)}")
+            return {'success': False, 'message': f'生成激活码失败: {str(e)}'}
+    
+    def create_activation_code(self, duration_days=30):
+        """创建通用激活码
+        
+        Args:
+            duration_days: 有效期天数
+            
+        Returns:
+            dict: 创建结果
+        """
+        try:
+            # 生成激活码
+            activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
+            
+            # 创建激活码记录
+            code_data = {
+                'code': activation_code,
+                'duration_days': duration_days,
+                'create_time': datetime.now().isoformat(),
+                'used': False
+            }
+            
+            self.supabase.table('activation_codes').insert(code_data).execute()
+            
+            return {
+                'success': True,
+                'message': '激活码创建成功',
+                'code': activation_code
+            }
+            
+        except Exception as e:
+            print(f"创建激活码时发生错误: {str(e)}")
+            return {'success': False, 'message': f'创建激活码失败: {str(e)}'}
+    
+    def get_activation_codes(self):
+        """获取激活码列表
+        
+        Returns:
+            dict: 激活码列表结果
+        """
+        try:
+            result = self.supabase.table('activation_codes').select('*').execute()
+            
+            return {
+                'success': True,
+                'codes': result.data
+            }
+            
+        except Exception as e:
+            print(f"获取激活码列表时发生错误: {str(e)}")
+            return {'success': False, 'message': f'获取激活码列表失败: {str(e)}'}
+    
+    def activate_user(self, user_id, activation_code, mac_address):
+        """激活用户
         
         Args:
             user_id: 用户ID
             activation_code: 激活码
+            mac_address: MAC地址
             
         Returns:
             dict: 激活结果
         """
         try:
-            # 验证激活码
-            code_data = self.supabase.table('activation_codes').select('*').eq('code', activation_code).execute()
+            # 先检查用户是否存在
+            user_result = self.supabase.table('users').select('*').eq('id', user_id).execute()
             
-            if not code_data.data:
-                return {'success': False, 'message': '无效的激活码'}
-                
-            code_info = code_data.data[0]
+            if not user_result.data:
+                return {'success': False, 'message': '用户不存在'}
+            
+            user = user_result.data[0]
+            
+            # 检查用户是否已激活
+            if user.get('activation_status') == '已激活':
+                return {'success': False, 'message': '用户已激活'}
+            
+            # 检查激活码
+            code_result = self.supabase.table('activation_codes').select('*').eq('code', activation_code).execute()
+            
+            if not code_result.data:
+                return {'success': False, 'message': '激活码不存在'}
+            
+            code = code_result.data[0]
             
             # 检查激活码是否已使用
-            if code_info.get('used'):
-                return {'success': False, 'message': '该激活码已被使用'}
-                
-            # 计算过期时间
-            duration_days = code_info.get('duration_days', 30)  # 默认30天
-            expiry_date = datetime.now() + timedelta(days=duration_days)
+            if code.get('used'):
+                return {'success': False, 'message': '激活码已被使用'}
             
-            # 更新用户信息
+            # 检查激活码是否过期
+            if code.get('create_time'):
+                try:
+                    created_at = datetime.fromisoformat(code['create_time'])
+                    duration_days = code.get('duration_days', 30)
+                    expiry_date = created_at + timedelta(days=duration_days)
+                    
+                    if expiry_date < datetime.now():
+                        return {'success': False, 'message': '激活码已过期'}
+                except:
+                    pass
+            
+            # 更新用户表
+            expiry_date = datetime.now() + timedelta(days=code.get('duration_days', 30))
+            
             self.supabase.table('users').update({
                 'activation_code': activation_code,
-                'expiry_date': expiry_date.isoformat()
+                'activation_status': '已激活',
+                'mac': mac_address,
+                'expired_time': expiry_date.isoformat(),
+                'update_time': datetime.now().isoformat()
             }).eq('id', user_id).execute()
             
-            # 标记激活码为已使用
+            # 更新激活码表
             self.supabase.table('activation_codes').update({
                 'used': True,
                 'used_by': user_id,
                 'used_at': datetime.now().isoformat()
-            }).eq('id', code_info['id']).execute()
+            }).eq('code', activation_code).execute()
             
             return {
-                'success': True, 
-                'message': '激活成功', 
-                'expiry_date': expiry_date.isoformat()
+                'success': True,
+                'message': '激活成功',
+                'expired_time': expiry_date.isoformat()
             }
             
         except Exception as e:
+            print(f"激活用户时发生错误: {str(e)}")
             return {'success': False, 'message': f'激活失败: {str(e)}'}
-    
-    def _get_current_mac(self):
-        """获取当前设备的MAC地址
-        
-        Returns:
-            str: MAC地址
-        """
-        import uuid
-        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
-                         for elements in range(0, 8*6, 8)][::-1])
-        return mac
-                         
-    def _refresh_supabase_client(self):
-        """刷新Supabase客户端连接"""
-        print("刷新Supabase客户端连接...")
-        try:
-            # 确保使用service_role密钥进行客户端初始化
-            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            # 验证密钥类型
-            if 'service_role' in SUPABASE_KEY:
-                print("使用service_role密钥初始化Supabase客户端")
-            else:
-                print("警告：未使用service_role密钥，某些管理功能可能受限")
-            print("Supabase客户端刷新成功")
-            return True
-        except Exception as e:
-            print(f"Supabase客户端刷新失败: {str(e)}")
-            return False
     
     # ===== 公众号文章相关方法 =====
     
@@ -477,7 +681,7 @@ class DatabaseManager:
                     'title': article_data['title'],
                     'content': article_data['content'],
                     'read_count': article_data['read_count'],
-                    'updated_at': datetime.now().isoformat()
+                    'update_time': datetime.now().isoformat()
                 }).eq('id', article_id).execute()
                 
                 return {'success': True, 'message': '文章更新成功', 'article_id': article_id}
@@ -492,8 +696,8 @@ class DatabaseManager:
                     'read_count': article_data['read_count'],
                     'article_url': article_data['article_url'],
                     'user_id': article_data['user_id'],
-                    'created_at': datetime.now().isoformat(),
-                    'updated_at': datetime.now().isoformat()
+                    'create_time': datetime.now().isoformat(),
+                    'update_time': datetime.now().isoformat()
                 }).execute()
                 
                 return {'success': True, 'message': '文章保存成功', 'article_id': result.data[0]['id']}
@@ -585,3 +789,31 @@ class DatabaseManager:
             
         except Exception as e:
             return {'success': False, 'message': f'搜索文章失败: {str(e)}'}
+    
+    def _get_current_mac(self):
+        """获取当前设备的MAC地址
+        
+        Returns:
+            str: MAC地址
+        """
+        import uuid
+        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
+                         for elements in range(0, 8*6, 8)][::-1])
+        return mac
+        
+    def _refresh_supabase_client(self):
+        """刷新Supabase客户端连接"""
+        print("刷新Supabase客户端连接...")
+        try:
+            # 确保使用service_role密钥进行客户端初始化
+            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # 验证密钥类型
+            if 'service_role' in SUPABASE_KEY:
+                print("使用service_role密钥初始化Supabase客户端")
+            else:
+                print("警告：未使用service_role密钥，某些管理功能可能受限")
+            print("Supabase客户端刷新成功")
+            return True
+        except Exception as e:
+            print(f"Supabase客户端刷新失败: {str(e)}")
+            return False

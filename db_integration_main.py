@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mp_downloader import WechatCollectorUI
 from models.db_integration import DatabaseIntegrationUI
 from utils.db_article_downloader import DBArticleDownloadManager
+from models.admin_manager import AdminPanel
 
 class IntegratedApp(QMainWindow):
     """集成了数据库功能的公众号采集助手"""
@@ -35,6 +36,10 @@ class IntegratedApp(QMainWindow):
         # 创建数据库界面
         self.db_ui = DatabaseIntegrationUI()
         self.tab_widget.addTab(self.db_ui, "数据库管理")
+        
+        # 创建管理员界面
+        self.admin_ui = AdminPanel()
+        self.tab_widget.addTab(self.admin_ui, "账号管理")
         
         # 连接信号
         self.db_ui.login_status_changed.connect(self.on_login_status_changed)
