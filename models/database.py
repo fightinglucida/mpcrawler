@@ -499,23 +499,21 @@ class DatabaseManager:
             if not user_result.data:
                 return {'success': False, 'message': '用户不存在'}
             
+            user = user_result.data[0]
+            
             # 生成激活码
             activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
             
-            # 更新用户表
-            self.supabase.table('users').update({
-                'activation_code': activation_code,
-                'activation_status': '未激活',
-                'update_time': datetime.now().isoformat()
-            }).eq('id', user_id).execute()
-            
             # 创建激活码记录
+            expiry_date = datetime.now() + timedelta(days=30)  # 默认30天有效期
+            
             code_data = {
                 'code': activation_code,
-                'user_id': user_id,
-                'duration_days': 30,  # 默认30天有效期
+                'user_email': user.get('email', ''),
+                'activation_status': '未激活',
+                'expiry_date': expiry_date.isoformat(),
                 'create_time': datetime.now().isoformat(),
-                'used': False
+                'update_time': datetime.now().isoformat()
             }
             
             self.supabase.table('activation_codes').insert(code_data).execute()
@@ -544,11 +542,14 @@ class DatabaseManager:
             activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
             
             # 创建激活码记录
+            expiry_date = datetime.now() + timedelta(days=duration_days)
+            
             code_data = {
                 'code': activation_code,
-                'duration_days': duration_days,
+                'activation_status': '未激活',
+                'expiry_date': expiry_date.isoformat(),
                 'create_time': datetime.now().isoformat(),
-                'used': False
+                'update_time': datetime.now().isoformat()
             }
             
             self.supabase.table('activation_codes').insert(code_data).execute()
@@ -581,7 +582,7 @@ class DatabaseManager:
             print(f"获取激活码列表时发生错误: {str(e)}")
             return {'success': False, 'message': f'获取激活码列表失败: {str(e)}'}
     
-    def activate_user(self, user_id, activation_code, mac_address):
+    def activate_user(self, user_id, activation_code, mac_address=None):
         """激活用户
         
         Args:
@@ -613,49 +614,151 @@ class DatabaseManager:
             
             code = code_result.data[0]
             
-            # 检查激活码是否已使用
-            if code.get('used'):
+            # 检查激活码是否已被使用
+            if code.get('activation_status') == '已激活':
                 return {'success': False, 'message': '激活码已被使用'}
             
             # 检查激活码是否过期
-            if code.get('create_time'):
+            if code.get('expiry_date'):
                 try:
-                    created_at = datetime.fromisoformat(code['create_time'])
-                    duration_days = code.get('duration_days', 30)
-                    expiry_date = created_at + timedelta(days=duration_days)
+                    expiry_date = datetime.fromisoformat(code['expiry_date'].replace('Z', '+00:00'))
                     
                     if expiry_date < datetime.now():
                         return {'success': False, 'message': '激活码已过期'}
-                except:
-                    pass
+                except Exception as date_error:
+                    print(f"日期解析错误: {str(date_error)}")
             
             # 更新用户表
-            expiry_date = datetime.now() + timedelta(days=code.get('duration_days', 30))
-            
             self.supabase.table('users').update({
-                'activation_code': activation_code,
                 'activation_status': '已激活',
-                'mac': mac_address,
-                'expired_time': expiry_date.isoformat(),
+                'mac': mac_address if mac_address else '',
+                'expired_time': code.get('expiry_date'),
                 'update_time': datetime.now().isoformat()
             }).eq('id', user_id).execute()
             
             # 更新激活码表
             self.supabase.table('activation_codes').update({
-                'used': True,
-                'used_by': user_id,
-                'used_at': datetime.now().isoformat()
+                'user_email': user.get('email', ''),
+                'activation_status': '已激活',
+                'activation_time': datetime.now().isoformat(),
+                'update_time': datetime.now().isoformat()
             }).eq('code', activation_code).execute()
             
             return {
                 'success': True,
                 'message': '激活成功',
-                'expired_time': expiry_date.isoformat()
+                'expired_time': code.get('expiry_date')
             }
             
         except Exception as e:
             print(f"激活用户时发生错误: {str(e)}")
             return {'success': False, 'message': f'激活失败: {str(e)}'}
+    
+    def get_activation_code_by_id(self, code_id):
+        """根据ID获取激活码
+        
+        Args:
+            code_id: 激活码ID
+            
+        Returns:
+            dict: 查询结果
+        """
+        try:
+            result = self.supabase.table('activation_codes').select('*').eq('id', code_id).execute()
+            
+            if not result.data:
+                return {'success': False, 'message': '激活码不存在'}
+            
+            return {
+                'success': True,
+                'code': result.data[0]
+            }
+            
+        except Exception as e:
+            print(f"获取激活码时发生错误: {str(e)}")
+            return {'success': False, 'message': f'获取激活码失败: {str(e)}'}
+    
+    def update_activation_code(self, code_id, expiry_date=None):
+        """更新激活码
+        
+        Args:
+            code_id: 激活码ID
+            expiry_date: 新的过期时间
+            
+        Returns:
+            dict: 更新结果
+        """
+        try:
+            # 先检查激活码是否存在
+            code_result = self.supabase.table('activation_codes').select('*').eq('id', code_id).execute()
+            
+            if not code_result.data:
+                return {'success': False, 'message': '激活码不存在'}
+            
+            update_data = {
+                'update_time': datetime.now().isoformat()
+            }
+            
+            if expiry_date:
+                update_data['expiry_date'] = expiry_date
+            
+            result = self.supabase.table('activation_codes').update(update_data).eq('id', code_id).execute()
+            
+            if not result.data:
+                return {'success': False, 'message': '更新激活码失败'}
+            
+            return {
+                'success': True,
+                'message': '激活码更新成功',
+                'code': result.data[0]
+            }
+            
+        except Exception as e:
+            print(f"更新激活码时发生错误: {str(e)}")
+            return {'success': False, 'message': f'更新激活码失败: {str(e)}'}
+    
+    def delete_activation_code(self, code_id):
+        """删除激活码
+        
+        Args:
+            code_id: 激活码ID
+            
+        Returns:
+            dict: 删除结果
+        """
+        try:
+            # 先检查激活码是否存在
+            code_result = self.supabase.table('activation_codes').select('*').eq('id', code_id).execute()
+            
+            if not code_result.data:
+                return {'success': False, 'message': '激活码不存在'}
+            
+            code = code_result.data[0]
+            
+            # 如果激活码已被使用，需要处理相关用户
+            if code.get('activation_status') == '已激活' and code.get('user_email'):
+                # 查找使用该激活码的用户
+                user_result = self.supabase.table('users').select('*').eq('email', code.get('user_email')).execute()
+                
+                if user_result.data:
+                    # 更新用户状态
+                    self.supabase.table('users').update({
+                        'activation_status': '未激活',
+                        'expired_time': None,
+                        'update_time': datetime.now().isoformat()
+                    }).eq('email', code.get('user_email')).execute()
+            
+            # 删除激活码
+            result = self.supabase.table('activation_codes').delete().eq('id', code_id).execute()
+            
+            return {
+                'success': True,
+                'message': '激活码删除成功'
+            }
+            
+        except Exception as e:
+            print(f"删除激活码时发生错误: {str(e)}")
+            return {'success': False, 'message': f'删除激活码失败: {str(e)}'}
     
     # ===== 公众号文章相关方法 =====
     

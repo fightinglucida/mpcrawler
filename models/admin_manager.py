@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBut
                              QDialog, QDateTimeEdit, QDialogButtonBox, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QDateTime
 from PyQt6.QtGui import QFont, QIcon
+import uuid
 
 # 导入数据库相关模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -390,15 +391,23 @@ class AdminPanel(QWidget):
         
         # 激活码列表
         self.code_table = QTableWidget()
-        self.code_table.setColumnCount(5)
+        self.code_table.setColumnCount(8)
         self.code_table.setHorizontalHeaderLabels([
-            "激活码", "有效期(天)", "已使用", "使用者", "使用时间"
+            "操作", "激活码", "用户邮箱", "激活状态", "过期时间", "激活时间", "创建时间", "更新时间"
         ])
-        self.code_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.code_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.code_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.code_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.code_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        
+        # 设置列宽
+        self.code_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.code_table.setColumnWidth(0, 150)  # 操作列宽度增加
+        self.code_table.setColumnWidth(1, 180)  # 激活码列宽度适中
+        self.code_table.setColumnWidth(2, 200)  # 用户邮箱
+        self.code_table.setColumnWidth(3, 100)  # 激活状态
+        self.code_table.setColumnWidth(4, 150)  # 过期时间
+        self.code_table.setColumnWidth(5, 150)  # 激活时间
+        self.code_table.setColumnWidth(6, 150)  # 创建时间
+        self.code_table.setColumnWidth(7, 150)  # 更新时间
+        
+        # 设置选择行为和编辑触发器
         self.code_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.code_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
@@ -407,7 +416,7 @@ class AdminPanel(QWidget):
         # 按钮区域
         button_layout = QHBoxLayout()
         
-        self.add_code_button = QPushButton("生成激活码")
+        self.add_code_button = QPushButton("新增激活码")
         self.add_code_button.clicked.connect(self.generate_code)
         button_layout.addWidget(self.add_code_button)
         
@@ -492,13 +501,17 @@ class AdminPanel(QWidget):
             action_layout = QHBoxLayout(action_widget)
             action_layout.setContentsMargins(0, 0, 0, 0)
             
-            edit_button = QPushButton("编辑")
+            edit_button = QPushButton("✎")  # 使用编辑图标
             edit_button.setProperty("user_id", user['id'])
             edit_button.clicked.connect(lambda _, btn=edit_button: self.edit_user(btn.property("user_id")))
+            edit_button.setFixedSize(45, 20)  
+            edit_button.setFont(QFont("微软雅黑", 8))  
             
-            delete_button = QPushButton("删除")
+            delete_button = QPushButton("✖")  # 使用删除图标
             delete_button.setProperty("user_id", user['id'])
             delete_button.clicked.connect(lambda _, btn=delete_button: self.delete_user(btn.property("user_id")))
+            delete_button.setFixedSize(45, 20)  
+            delete_button.setFont(QFont("微软雅黑", 8))  
             
             action_layout.addWidget(edit_button)
             action_layout.addWidget(delete_button)
@@ -605,41 +618,117 @@ class AdminPanel(QWidget):
             row = self.code_table.rowCount()
             self.code_table.insertRow(row)
             
-            self.code_table.setItem(row, 0, QTableWidgetItem(code.get('code', '')))
-            self.code_table.setItem(row, 1, QTableWidgetItem(str(code.get('duration_days', 30))))
-            self.code_table.setItem(row, 2, QTableWidgetItem("是" if code.get('used', False) else "否"))
+            # 操作按钮
+            btn_widget = QWidget()
+            btn_layout = QHBoxLayout(btn_widget)
+            btn_layout.setContentsMargins(5, 2, 5, 2)  
+            btn_layout.setSpacing(10)  
             
-            # 获取使用者信息
-            used_by = code.get('used_by', '')
-            user_name = ''
-            if used_by:
-                try:
-                    user_result = self.db_manager.get_user_by_id(used_by)
-                    if user_result['success']:
-                        user_name = user_result['user'].get('nickname', '')
-                except:
-                    pass
-            self.code_table.setItem(row, 3, QTableWidgetItem(user_name))
+            edit_btn = QPushButton("✎")  # 使用编辑图标
+            edit_btn.setFixedSize(45, 20)  
+            edit_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border-radius: 3px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                    padding: 0px;
+                    margin: 0px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+            """)
+            edit_btn.clicked.connect(lambda checked, code_id=code.get('id'): self.edit_code(code_id))
+            edit_btn.setFont(QFont("微软雅黑", 8))  
             
-            # 格式化使用时间
-            used_at = code.get('used_at', '')
-            if used_at:
+            delete_btn = QPushButton("✖")  # 使用删除图标
+            delete_btn.setFixedSize(45, 20)  
+            delete_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f44336;
+                    color: white;
+                    border-radius: 3px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                    padding: 0px;
+                    margin: 0px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+            """)
+            delete_btn.clicked.connect(lambda checked, code_id=code.get('id'): self.delete_code(code_id))
+            delete_btn.setFont(QFont("微软雅黑", 8))  
+            
+            btn_layout.addWidget(edit_btn)
+            btn_layout.addWidget(delete_btn)
+            btn_widget.setLayout(btn_layout)
+            
+            self.code_table.setCellWidget(row, 0, btn_widget)
+            self.code_table.setItem(row, 1, QTableWidgetItem(code.get('code', '')))
+            self.code_table.setItem(row, 2, QTableWidgetItem(code.get('user_email', '')))
+            self.code_table.setItem(row, 3, QTableWidgetItem(code.get('activation_status', '未激活')))
+            
+            # 格式化过期时间
+            expiry_date = code.get('expiry_date', '')
+            if expiry_date:
                 try:
-                    date_obj = datetime.fromisoformat(used_at)
-                    used_at = date_obj.strftime("%Y-%m-%d %H:%M:%S")
-                except:
-                    pass
-            self.code_table.setItem(row, 4, QTableWidgetItem(used_at))
+                    date_obj = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                    expiry_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            self.code_table.setItem(row, 4, QTableWidgetItem(expiry_date))
+            
+            # 格式化激活时间
+            activation_time = code.get('activation_time', '')
+            if activation_time:
+                try:
+                    date_obj = datetime.fromisoformat(activation_time.replace('Z', '+00:00'))
+                    activation_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            self.code_table.setItem(row, 5, QTableWidgetItem(activation_time))
+            
+            # 格式化创建时间
+            create_time = code.get('create_time', '')
+            if create_time:
+                try:
+                    date_obj = datetime.fromisoformat(create_time.replace('Z', '+00:00'))
+                    create_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            self.code_table.setItem(row, 6, QTableWidgetItem(create_time))
+            
+            # 格式化更新时间
+            update_time = code.get('update_time', '')
+            if update_time:
+                try:
+                    date_obj = datetime.fromisoformat(update_time.replace('Z', '+00:00'))
+                    update_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            self.code_table.setItem(row, 7, QTableWidgetItem(update_time))
     
     def generate_code(self):
         """生成激活码"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("生成激活码")
-        dialog.setFixedSize(300, 150)
+        dialog.setWindowTitle("新增激活码")
+        dialog.setFixedSize(400, 200)
         
         layout = QVBoxLayout()
         
         form_layout = QFormLayout()
+        
+        # 激活码自动生成
+        activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
+        code_label = QLabel(activation_code)
+        form_layout.addRow("激活码:", code_label)
+        
+        # 激活状态默认为未激活
+        status_label = QLabel("未激活")
+        form_layout.addRow("激活状态:", status_label)
         
         # 有效期输入
         duration_input = QLineEdit()
@@ -649,7 +738,7 @@ class AdminPanel(QWidget):
         layout.addLayout(form_layout)
         
         # 按钮区域
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
         
@@ -676,3 +765,132 @@ class AdminPanel(QWidget):
                 QMessageBox.warning(self, "输入错误", "有效期必须是数字")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"生成激活码失败: {str(e)}")
+    
+    def edit_code(self, code_id):
+        """编辑激活码"""
+        try:
+            # 获取激活码信息
+            result = self.db_manager.get_activation_code_by_id(code_id)
+            
+            if not result['success']:
+                QMessageBox.warning(self, "获取激活码失败", result['message'])
+                return
+                
+            code_data = result['code']
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("编辑激活码")
+            dialog.setFixedSize(400, 300)
+            
+            layout = QVBoxLayout()
+            
+            form_layout = QFormLayout()
+            
+            # 激活码（不可修改）
+            code_label = QLabel(code_data.get('code', ''))
+            form_layout.addRow("激活码:", code_label)
+            
+            # 用户邮箱（只读）
+            email_label = QLabel(code_data.get('user_email', ''))
+            form_layout.addRow("用户邮箱:", email_label)
+            
+            # 激活状态（只读）
+            status_label = QLabel(code_data.get('activation_status', '未激活'))
+            form_layout.addRow("激活状态:", status_label)
+            
+            # 过期时间（可修改）
+            expiry_date = None
+            if code_data.get('expiry_date'):
+                try:
+                    expiry_date = datetime.fromisoformat(code_data['expiry_date'].replace('Z', '+00:00'))
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            
+            expiry_date_edit = QDateTimeEdit()
+            expiry_date_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            expiry_date_edit.setCalendarPopup(True)
+            if expiry_date:
+                expiry_date_edit.setDateTime(QDateTime(expiry_date.year, expiry_date.month, expiry_date.day, 
+                                                      expiry_date.hour, expiry_date.minute, expiry_date.second))
+            else:
+                expiry_date_edit.setDateTime(QDateTime.currentDateTime().addDays(30))
+            form_layout.addRow("过期时间:", expiry_date_edit)
+            
+            # 激活时间（只读）
+            activation_time = ''
+            if code_data.get('activation_time'):
+                try:
+                    date_obj = datetime.fromisoformat(code_data['activation_time'].replace('Z', '+00:00'))
+                    activation_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            activation_time_label = QLabel(activation_time)
+            form_layout.addRow("激活时间:", activation_time_label)
+            
+            # 创建时间（只读）
+            create_time = ''
+            if code_data.get('create_time'):
+                try:
+                    date_obj = datetime.fromisoformat(code_data['create_time'].replace('Z', '+00:00'))
+                    create_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception as e:
+                    print(f"日期解析错误: {str(e)}")
+            create_time_label = QLabel(create_time)
+            form_layout.addRow("创建时间:", create_time_label)
+            
+            layout.addLayout(form_layout)
+            
+            # 按钮区域
+            button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            
+            layout.addWidget(button_box)
+            
+            dialog.setLayout(layout)
+            
+            if dialog.exec():
+                # 更新过期时间
+                qt_datetime = expiry_date_edit.dateTime()
+                new_expiry_date = datetime(
+                    qt_datetime.date().year(),
+                    qt_datetime.date().month(),
+                    qt_datetime.date().day(),
+                    qt_datetime.time().hour(),
+                    qt_datetime.time().minute(),
+                    qt_datetime.time().second()
+                )
+                
+                result = self.db_manager.update_activation_code(code_id, expiry_date=new_expiry_date.isoformat())
+                
+                if result['success']:
+                    QMessageBox.information(self, "成功", "激活码更新成功")
+                    self.refresh_codes()
+                else:
+                    QMessageBox.warning(self, "更新失败", result['message'])
+                
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"编辑激活码失败: {str(e)}")
+    
+    def delete_code(self, code_id):
+        """删除激活码"""
+        try:
+            # 确认是否删除
+            confirm = QMessageBox.question(
+                self, 
+                "确认删除", 
+                "确定要删除该激活码吗？如果该激活码已被用户使用，删除后将导致用户无法继续使用。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if confirm == QMessageBox.StandardButton.Yes:
+                result = self.db_manager.delete_activation_code(code_id)
+                
+                if result['success']:
+                    QMessageBox.information(self, "成功", "激活码删除成功")
+                    self.refresh_codes()
+                else:
+                    QMessageBox.warning(self, "删除失败", result['message'])
+                
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"删除激活码失败: {str(e)}")
