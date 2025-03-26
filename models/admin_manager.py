@@ -65,11 +65,6 @@ class AdminLoginDialog(QDialog):
             QMessageBox.warning(self, "输入错误", "请输入邮箱和密码")
             return
         
-        # 检查是否是管理员账号
-        if email != "lishuo1607@gmail.com":
-            QMessageBox.warning(self, "权限错误", "非管理员账号，无法登录")
-            return
-        
         # 验证登录
         result = self.db_manager.login_user(email, password)
         

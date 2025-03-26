@@ -315,10 +315,16 @@ class DatabaseManager:
             
             user = user_result.data[0]
             
-            # 使用邮箱地址判断管理员权限
-            return user.get('role') == '0'  # 0表示管理员
+            # 获取用户角色，并转换为字符串进行比较
+            role = user.get('role')
+            # 打印角色信息，便于调试
+            print(f"用户 {user_id} 的角色值: {role}, 类型: {type(role)}")
             
-        except:
+            # 同时处理字符串和数字类型的 role 值
+            return str(role) == '0'  # 0表示管理员
+            
+        except Exception as e:
+            print(f"检查管理员权限时出错: {str(e)}")
             return False
     
     def get_users(self, email=None, nickname=None):
