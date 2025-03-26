@@ -1,0 +1,36 @@
+# 忽略 collection 和 download 文件夹下的所有内容
+/collection/
+/download/
+
+# 包含 utils/cookies 文件夹，但忽略其中的特定文件
+!/utils/cookies/
+/utils/cookies/cookie.json
+/utils/cookies/gzhcookies.cookie
+
+# 常见的临时文件和缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 日志文件
+*.log
+
+# 本地配置文件
+.env
