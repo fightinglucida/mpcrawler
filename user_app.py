@@ -23,7 +23,7 @@ class UserApp(QMainWindow):
         
         # 设置窗口标题和大小
         self.setWindowTitle("公众号采集与下载助手 V1.0 ")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1200, 900)
         
         # 设置窗口图标
         icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.svg")
@@ -60,6 +60,9 @@ class UserApp(QMainWindow):
         # 默认选择用户中心选项卡并自动弹出登录界面
         self.tab_widget.setCurrentIndex(1)
         QTimer.singleShot(500, self.auto_show_login)
+        
+        # 连接标签页切换信号
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
     
     def auto_show_login(self):
         """自动显示登录界面或尝试自动登录"""
@@ -72,9 +75,114 @@ class UserApp(QMainWindow):
             self.user_center.on_login_success(result['user'])
             # 在状态栏显示提示信息
             self.status_bar.showMessage("已通过设备识别自动登录", 5000)  # 显示5秒
+            
+            # 检查用户激活状态，如果已激活则自动切换到公众号采集页面
+            if result['user'].get('activation_status') == '已激活':
+                QTimer.singleShot(1000, lambda: self.switch_to_collector(True))
+            else:
+                # 未激活状态，禁用公众号采集页面
+                self.disable_collector_features()
         else:
             # 自动登录失败，显示登录对话框
             self.user_center.show_login_dialog()
+            # 禁用公众号采集页面
+            self.disable_collector_features()
+    
+    def on_login_status_changed(self, is_logged_in, user_info):
+        """用户登录状态变化回调"""
+        if is_logged_in and user_info:
+            # 用户登录成功，可以在这里更新UI或进行其他操作
+            print(f"用户登录成功: {user_info.get('nickname', '')}")
+            
+            # 更新状态栏
+            self.status_bar.showMessage(f"用户已登录: {user_info.get('nickname', '')}")
+            
+            # 更新下载管理器的用户ID
+            if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
+                self.collector_ui.download_manager.set_user_id(user_info.get('id'))
+                
+                # 如果用户已激活，启用保存到数据库功能
+                if user_info.get('activation_status') == '已激活':
+                    self.collector_ui.download_manager.set_save_to_db(True)
+                    # 启用公众号采集页面并自动切换
+                    self.switch_to_collector(True)
+                else:
+                    # 未激活状态，禁用公众号采集页面
+                    self.disable_collector_features()
+        else:
+            # 用户退出登录
+            print("用户已退出登录")
+            
+            # 更新状态栏
+            self.status_bar.showMessage("用户未登录")
+            
+            # 更新下载管理器
+            if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
+                self.collector_ui.download_manager.set_user_id(None)
+                self.collector_ui.download_manager.set_save_to_db(False)
+            
+            # 禁用公众号采集页面
+            self.disable_collector_features()
+    
+    def switch_to_collector(self, check_wechat_login=False):
+        """切换到公众号采集页面并根据需要检查微信登录状态"""
+        # 切换到公众号采集页面
+        self.tab_widget.setCurrentIndex(0)
+        
+        # 启用公众号采集页面的所有功能
+        self.enable_collector_features()
+        
+        # 如果需要，检查微信登录状态
+        if check_wechat_login:
+            QTimer.singleShot(500, self.check_wechat_login)
+    
+    def check_wechat_login(self):
+        """检查微信登录状态，自动登录或显示扫码登录"""
+        try:
+            # 调用公众号采集界面的登录状态检查
+            self.collector_ui.check_login_status()
+        except Exception as e:
+            print(f"检查微信登录状态出错: {str(e)}")
+    
+    def enable_collector_features(self):
+        """启用公众号采集页面的所有功能"""
+        try:
+            # 启用公众号采集页面的所有功能
+            self.collector_ui.enable_all_features()
+            # 更新标签页状态
+            self.tab_widget.setTabEnabled(0, True)
+        except Exception as e:
+            print(f"启用公众号采集页面功能出错: {str(e)}")
+    
+    def disable_collector_features(self):
+        """禁用公众号采集页面的所有功能"""
+        try:
+            # 禁用公众号采集页面的所有功能
+            self.collector_ui.disable_all_features()
+            # 更新标签页状态
+            self.tab_widget.setTabEnabled(0, False)
+        except Exception as e:
+            print(f"禁用公众号采集页面功能出错: {str(e)}")
+    
+    def on_tab_changed(self, index):
+        """标签页切换事件处理"""
+        if index == 0:  # 切换到公众号采集页面
+            # 获取当前用户信息
+            user_info = self.user_center.current_user if hasattr(self.user_center, 'current_user') else None
+            
+            # 检查用户是否已登录且已激活
+            if user_info and user_info.get('activation_status') == '已激活':
+                # 已激活状态，启用功能
+                self.enable_collector_features()
+                
+                # 只有在公众号采集界面未登录状态下才检查微信登录
+                if not self.collector_ui.is_logged_in:
+                    self.check_wechat_login()
+            else:
+                # 未登录或未激活状态，禁用功能并切换回用户中心
+                self.disable_collector_features()
+                self.status_bar.showMessage("请先登录并激活账号", 5000)
+                QTimer.singleShot(100, lambda: self.tab_widget.setCurrentIndex(1))
     
     def setup_db_downloader(self):
         """设置支持数据库的下载管理器"""
@@ -105,34 +213,6 @@ class UserApp(QMainWindow):
         except Exception as e:
             print(f"设置数据库下载管理器失败: {str(e)}")
     
-    def on_login_status_changed(self, is_logged_in, user_info):
-        """用户登录状态变化回调"""
-        if is_logged_in and user_info:
-            # 用户登录成功，可以在这里更新UI或进行其他操作
-            print(f"用户登录成功: {user_info.get('nickname', '')}")
-            
-            # 更新状态栏
-            self.status_bar.showMessage(f"用户已登录: {user_info.get('nickname', '')}")
-            
-            # 更新下载管理器的用户ID
-            if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
-                self.collector_ui.download_manager.set_user_id(user_info.get('id'))
-                
-                # 如果用户已激活，启用保存到数据库功能
-                if user_info.get('activation_status') == '已激活':
-                    self.collector_ui.download_manager.set_save_to_db(True)
-        else:
-            # 用户退出登录
-            print("用户已退出登录")
-            
-            # 更新状态栏
-            self.status_bar.showMessage("用户未登录")
-            
-            # 更新下载管理器
-            if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
-                self.collector_ui.download_manager.set_user_id(None)
-                self.collector_ui.download_manager.set_save_to_db(False)
-    
     def check_environment(self):
         """检查环境变量"""
         from dotenv import load_dotenv
@@ -155,14 +235,63 @@ class UserCenterPanel(QWidget):
     
     def setup_ui(self):
         """设置界面"""
+        # 设置全局样式
+        self.setStyleSheet("""
+            QWidget {
+                font-family: 'Microsoft YaHei';
+                background-color: #f8f9fa;
+            }
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 5px;
+                padding-top: 3px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QPushButton {
+                background-color: #f0f0f0;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 3px 10px;  
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+                min-height: 24px;  
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: #ffffff;
+                font-family: 'Microsoft YaHei';
+                min-height: 25px;
+            }
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+            }
+        """)
+        
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
         
         # 用户信息区域
         self.user_info_group = QGroupBox("用户信息")
         user_info_layout = QGridLayout()
         user_info_layout.setColumnStretch(2, 1)  # 让第三列拉伸
+        user_info_layout.setSpacing(8)  # 设置控件间距
         
         # 用户信息
         self.email_label = QLabel("未登录")
@@ -177,20 +306,58 @@ class UserCenterPanel(QWidget):
         
         # 登录状态
         self.status_label = QLabel("未登录")
-        self.status_label.setStyleSheet("color: red;")
+        self.status_label.setStyleSheet("color: #e74c3c;")
         user_info_layout.addWidget(QLabel("状态:"), 2, 0)
         user_info_layout.addWidget(self.status_label, 2, 1)
         
         # 登录/登出按钮
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
         
         self.login_button = QPushButton("登录")
         self.login_button.setFixedWidth(100)
+        self.login_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: 1px solid #388E3C;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:pressed {
+                background-color: #2E7D32;
+            }
+        """)
         self.login_button.clicked.connect(self.show_login_dialog)
         button_layout.addWidget(self.login_button)
         
         self.logout_button = QPushButton("退出登录")
         self.logout_button.setFixedWidth(100)
+        self.logout_button.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border: 1px solid #D32F2F;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:pressed {
+                background-color: #C62828;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                border: 1px solid #9E9E9E;
+                color: #757575;
+            }
+        """)
         self.logout_button.clicked.connect(self.logout)
         self.logout_button.setEnabled(False)
         button_layout.addWidget(self.logout_button)
@@ -203,11 +370,13 @@ class UserCenterPanel(QWidget):
         
         # 激活信息和密码修改区域（放在同一行）
         activation_password_layout = QHBoxLayout()
+        activation_password_layout.setSpacing(10)
         
         # 激活信息区域
         self.activation_group = QGroupBox("激活信息")
         activation_layout = QGridLayout()
         activation_layout.setColumnStretch(1, 1)  # 让第二列拉伸
+        activation_layout.setSpacing(8)  # 设置控件间距
         
         # 激活码信息
         activation_layout.addWidget(QLabel("激活码:"), 0, 0)
@@ -234,6 +403,27 @@ class UserCenterPanel(QWidget):
         
         self.activate_button = QPushButton("激活")
         self.activate_button.setFixedWidth(80)
+        self.activate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: 1px solid #1976D2;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                border: 1px solid #9E9E9E;
+                color: #757575;
+            }
+        """)
         self.activate_button.clicked.connect(self.activate_account)
         self.activate_button.setEnabled(False)
         activation_layout.addWidget(self.activate_button, 5, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
@@ -243,28 +433,53 @@ class UserCenterPanel(QWidget):
         
         # 密码修改区域
         self.password_group = QGroupBox("密码修改")
-        password_layout = QFormLayout()
+        password_layout = QGridLayout()
+        password_layout.setSpacing(8)  # 设置控件间距
         
+        password_layout.addWidget(QLabel("旧密码:"), 0, 0)
         self.old_password_input = QLineEdit()
         self.old_password_input.setPlaceholderText("请输入旧密码")
         self.old_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        password_layout.addRow("旧密码:", self.old_password_input)
+        password_layout.addWidget(self.old_password_input, 0, 1)
         
+        password_layout.addWidget(QLabel("新密码:"), 1, 0)
         self.new_password_input = QLineEdit()
         self.new_password_input.setPlaceholderText("请输入新密码")
         self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        password_layout.addRow("新密码:", self.new_password_input)
+        password_layout.addWidget(self.new_password_input, 1, 1)
         
+        password_layout.addWidget(QLabel("确认密码:"), 2, 0)
         self.confirm_password_input = QLineEdit()
         self.confirm_password_input.setPlaceholderText("请确认新密码")
         self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        password_layout.addRow("确认密码:", self.confirm_password_input)
+        password_layout.addWidget(self.confirm_password_input, 2, 1)
         
         self.change_password_button = QPushButton("修改密码")
         self.change_password_button.setFixedWidth(80)
+        self.change_password_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border: 1px solid #F57C00;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton:pressed {
+                background-color: #EF6C00;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                border: 1px solid #9E9E9E;
+                color: #757575;
+            }
+        """)
         self.change_password_button.clicked.connect(self.change_password)
         self.change_password_button.setEnabled(False)
-        password_layout.addRow("", self.change_password_button)
+        password_layout.addWidget(self.change_password_button, 3, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
         
         self.password_group.setLayout(password_layout)
         activation_password_layout.addWidget(self.password_group)
@@ -273,9 +488,12 @@ class UserCenterPanel(QWidget):
         
         # 状态信息
         self.message_label = QLabel("")
-        self.message_label.setStyleSheet("color: blue;")
+        self.message_label.setStyleSheet("color: #3498db; font-weight: bold;")
         self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.message_label)
+        
+        # 添加底部间距
+        main_layout.addStretch()
         
         self.setLayout(main_layout)
     
@@ -528,17 +746,42 @@ class UserCenterPanel(QWidget):
             expiry_display = ''
             if expiry_date:
                 try:
+                    # 处理不同格式的日期字符串
                     if 'T' in expiry_date:
-                        # 处理ISO格式
+                        # 处理带时区的ISO格式
+                        if '+' in expiry_date:
+                            expiry_date = expiry_date.split('+')[0]
+                        # 处理带毫秒的格式
                         if '.' in expiry_date:
-                            expiry_datetime = datetime.strptime(expiry_date.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S.%f')
                         else:
-                            expiry_datetime = datetime.strptime(expiry_date.split('+')[0], '%Y-%m-%dT%H:%M:%S')
-                        expiry_display = expiry_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S')
                     else:
-                        expiry_display = expiry_date
+                        expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%d')
+                        
+                    # 获取当前时间
+                    current_datetime = datetime.now()
+                    
+                    # 检查是否过期
+                    if current_datetime > expiry_datetime:
+                        # 已过期，更新激活状态
+                        update_result = self.db_manager.update_activation_status(
+                            self.user_id, 
+                            activation_code, 
+                            '已过期'
+                        )
+                        
+                        if update_result['success']:
+                            # 在状态栏显示提示
+                            self.parent().status_bar.showMessage("您的激活码已过期，请重新激活", 5000)
+                        
+                        # 重新获取用户信息
+                        updated_user = self.db_manager.get_user_by_id(self.user_id)
+                        if updated_user['success']:
+                            self.current_user = updated_user['user']
+                            # 更新UI
+                            self.update_ui_after_login()
                 except Exception as e:
-                    expiry_display = expiry_date
                     print(f"格式化过期时间出错: {str(e)}")
             
             # 显示成功信息，包含过期时间
@@ -612,46 +855,126 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.db_manager = UserDatabaseManager()
         self.setup_ui()
-        
+    
     def setup_ui(self):
         """设置界面"""
         self.setWindowTitle("用户登录")
         self.setFixedSize(400, 300)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+            QWidget {
+                font-family: 'Microsoft YaHei';
+            }
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 5px;
+                padding-top: 3px;
+            }
+            QPushButton {
+                background-color: #f0f0f0;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 3px 10px;  
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+                min-height: 24px;  
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: #ffffff;
+                font-family: 'Microsoft YaHei';
+                min-height: 25px;
+            }
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+            }
+        """)
         
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
+        # 标题
+        title_label = QLabel("用户登录")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+        
+        # 表单布局
+        form_layout = QGridLayout()
+        form_layout.setSpacing(10)
+        
         # 邮箱输入
-        email_layout = QHBoxLayout()
-        email_label = QLabel("邮箱:")
-        email_label.setFixedWidth(80)
+        form_layout.addWidget(QLabel("邮箱:"), 0, 0)
         self.email_input = QLineEdit()
         self.email_input.setPlaceholderText("请输入邮箱")
-        email_layout.addWidget(email_label)
-        email_layout.addWidget(self.email_input)
-        layout.addLayout(email_layout)
+        form_layout.addWidget(self.email_input, 0, 1)
         
         # 密码输入
-        password_layout = QHBoxLayout()
-        password_label = QLabel("密码:")
-        password_label.setFixedWidth(80)
+        form_layout.addWidget(QLabel("密码:"), 1, 0)
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("请输入密码")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        password_layout.addWidget(password_label)
-        password_layout.addWidget(self.password_input)
-        layout.addLayout(password_layout)
+        form_layout.addWidget(self.password_input, 1, 1)
         
-        # 登录按钮
+        layout.addLayout(form_layout)
+        
+        # 按钮布局
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
         
         self.login_button = QPushButton("登录")
         self.login_button.setFixedWidth(100)
+        self.login_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: 1px solid #388E3C;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:pressed {
+                background-color: #2E7D32;
+            }
+        """)
         self.login_button.clicked.connect(self.login)
         
         self.register_button = QPushButton("注册")
         self.register_button.setFixedWidth(100)
+        self.register_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: 1px solid #1976D2;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+        """)
         self.register_button.clicked.connect(self.show_register_dialog)
         
         button_layout.addStretch()
@@ -661,8 +984,13 @@ class LoginDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        # 添加垂直空白
-        layout.addStretch()
+        # 状态信息
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #e74c3c;")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_label)
+        
+        self.setLayout(layout)
     
     def login(self):
         """登录"""

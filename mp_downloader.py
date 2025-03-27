@@ -894,20 +894,7 @@ class WechatCollectorUI(QMainWindow):
                 background-color: #263238;
             }
         """
-        
-        PROGRESS_BAR_STYLE = """
-            QProgressBar {
-                border: 1px solid #d0d0d0;
-                border-radius: 4px;
-                text-align: center;
-                background-color: #f5f5f5;
-                min-height: 25px;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 3px;
-            }
-        """
+
         
         DOWNLOAD_SELECTED_BUTTON_STYLE = """
             QPushButton {
@@ -990,20 +977,7 @@ class WechatCollectorUI(QMainWindow):
         
         control_layout.addLayout(download_path_layout)
         
-        # 创建进度条
-        progress_layout = QHBoxLayout()
-        progress_layout.setSpacing(10)  # 设置控件间距
-        
-        progress_label = QLabel("下载进度:")
-        progress_label.setFont(QFont("Microsoft YaHei", 9))
-        progress_layout.addWidget(progress_label)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet(PROGRESS_BAR_STYLE)
-        self.progress_bar.setTextVisible(True)  # 显示进度文本
-        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 文本居中
-        progress_layout.addWidget(self.progress_bar)
-        
+
         # 创建按钮布局
         button_layout = QHBoxLayout()
         button_layout.setSpacing(15)  # 设置按钮间距
@@ -1026,7 +1000,6 @@ class WechatCollectorUI(QMainWindow):
         button_layout.addStretch(1)
         
         # 添加到控制布局
-        control_layout.addLayout(progress_layout)
         control_layout.addLayout(button_layout)
         
         control_group.setLayout(control_layout)
