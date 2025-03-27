@@ -366,10 +366,12 @@ class UserDatabaseManager:
             current_time = datetime.now()
             
             # 从激活码获取有效天数，默认为30天
-            valid_days = code.get('valid_days', 30)
+            valid_days = int(code.get('valid_days', 30))
             
             # 计算过期时间
             expiry_date = (current_time + timedelta(days=valid_days)).isoformat()
+            
+            print(f"激活用户 {user_id}，激活码 {activation_code}，有效天数 {valid_days}，激活时间 {current_time.isoformat()}，过期时间 {expiry_date}")
             
             # 更新激活码信息
             self.supabase.table('activation_codes').update({

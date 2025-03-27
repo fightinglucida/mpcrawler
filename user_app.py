@@ -523,7 +523,28 @@ class UserCenterPanel(QWidget):
         result = self.db_manager.activate_user(self.current_user.get('id'), activation_code, mac_address)
         
         if result['success']:
-            QMessageBox.information(self, "成功", "账号激活成功")
+            # 格式化过期时间显示
+            expiry_date = result.get('expiry_date', '')
+            expiry_display = ''
+            if expiry_date:
+                try:
+                    if 'T' in expiry_date:
+                        # 处理ISO格式
+                        if '.' in expiry_date:
+                            expiry_datetime = datetime.strptime(expiry_date.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                        else:
+                            expiry_datetime = datetime.strptime(expiry_date.split('+')[0], '%Y-%m-%dT%H:%M:%S')
+                        expiry_display = expiry_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        expiry_display = expiry_date
+                except Exception as e:
+                    expiry_display = expiry_date
+                    print(f"格式化过期时间出错: {str(e)}")
+            
+            # 显示成功信息，包含过期时间
+            success_message = f"账号激活成功！\n\n激活时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n过期时间: {expiry_display}"
+            QMessageBox.information(self, "激活成功", success_message)
+            
             self.activation_code_input.clear()
             
             # 刷新激活信息
@@ -534,6 +555,10 @@ class UserCenterPanel(QWidget):
             if updated_user['success']:
                 self.current_user = updated_user['user']
                 self.login_status_changed.emit(True, self.current_user)
+                
+            # 在消息标签中显示激活成功信息
+            self.message_label.setText(f"激活成功，账号有效期至: {expiry_display}")
+            self.message_label.setStyleSheet("color: green;")
         else:
             QMessageBox.warning(self, "错误", result['message'])
     
