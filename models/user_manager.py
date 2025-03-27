@@ -7,7 +7,7 @@ from PyQt6.QtGui import QFont
 
 # 导入数据库管理器
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models.database import DatabaseManager
+from models.user_database import UserDatabaseManager
 
 class LoginDialog(QDialog):
     """用户登录对话框"""
@@ -17,7 +17,7 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户登录")
         self.setFixedSize(400, 300)
-        self.db_manager = DatabaseManager()
+        self.db_manager = UserDatabaseManager()
         
         self.setup_ui()
     
@@ -82,7 +82,7 @@ class LoginDialog(QDialog):
             return
         
         # 调用数据库登录方法
-        result = self.db_manager.login_user(email, password)
+        result = self.db_manager.login(email, password)
         
         if result['success']:
             self.login_success.emit(result['user'])
@@ -106,7 +106,7 @@ class RegisterDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户注册")
         self.setFixedSize(400, 350)
-        self.db_manager = DatabaseManager()
+        self.db_manager = UserDatabaseManager()
         
         self.setup_ui()
     
@@ -207,7 +207,7 @@ class ActivationDialog(QDialog):
         self.setWindowTitle("账号激活")
         self.setFixedSize(400, 200)
         self.user_id = user_id
-        self.db_manager = DatabaseManager()
+        self.db_manager = UserDatabaseManager()
         
         self.setup_ui()
     

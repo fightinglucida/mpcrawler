@@ -728,7 +728,7 @@ class WechatCollectorUI(QMainWindow):
                 self.login_avatar_label.setText("头像")
                 self.login_name_label.setText("登录公众号名称")
                 
-                # 清空目标公众号信息显示
+                # 清空目标公众号信息
                 self.avatar_label.setText("头像")
                 self.account_name_label.setText("公众号名称")
                 self.article_count_label.setText("文章数: 0")
@@ -769,10 +769,7 @@ class WechatCollectorUI(QMainWindow):
             
             # 解析响应内容
             if response.status_code == 200:
-                # 保存响应内容到文件，用于调试
-                with open("wechat_response.html", "w", encoding="utf-8") as f:
-                    f.write(response.text)
-                print("已保存响应内容到 wechat_response.html")
+                print("已获取响应内容")
                 
                 # 使用参考代码中的正则表达式模式
                 import re
