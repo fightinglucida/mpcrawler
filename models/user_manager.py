@@ -186,11 +186,8 @@ class RegisterDialog(QDialog):
             self.status_label.setText("两次输入的密码不一致")
             return
         
-        # 获取当前设备MAC地址
-        mac_address = self.db_manager._get_current_mac()
-        
         # 调用数据库注册方法
-        result = self.db_manager.register_user(email, password, nickname, mac_address)
+        result = self.db_manager.register_user(email, password, nickname)
         
         if result['success']:
             QMessageBox.information(self, "注册成功", "注册成功，请登录并激活账号")

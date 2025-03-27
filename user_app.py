@@ -3,7 +3,7 @@ import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QMessageBox, 
                              QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QPushButton, QGroupBox, QFormLayout, QFrame,
-                             QGridLayout)
+                             QGridLayout, QDialog)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QPixmap
 
@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mp_downloader import WechatCollectorUI
 from utils.db_article_downloader import DBArticleDownloadManager
 from models.user_database import UserDatabaseManager
-from models.user_manager import LoginDialog, RegisterDialog
+from models.user_manager import RegisterDialog
 
 class UserApp(QMainWindow):
     """用户版本的公众号采集助手"""
@@ -62,8 +62,18 @@ class UserApp(QMainWindow):
         QTimer.singleShot(500, self.auto_show_login)
     
     def auto_show_login(self):
-        """自动显示登录界面"""
-        self.user_center.show_login_dialog()
+        """自动显示登录界面或尝试自动登录"""
+        # 尝试通过MAC地址自动登录
+        db_manager = UserDatabaseManager()
+        result = db_manager.auto_login_by_mac()
+        
+        if result['success']:
+            # 自动登录成功
+            self.user_center.on_login_success(result['user'])
+            QMessageBox.information(self, "自动登录", "已通过设备识别自动登录")
+        else:
+            # 自动登录失败，显示登录对话框
+            self.user_center.show_login_dialog()
     
     def setup_db_downloader(self):
         """设置支持数据库的下载管理器"""
@@ -134,7 +144,7 @@ class UserApp(QMainWindow):
 
 class UserCenterPanel(QWidget):
     """用户中心面板"""
-    login_status_changed = pyqtSignal(bool, dict)  # 登录状态变化信号
+    login_status_changed = pyqtSignal(bool, object)  # 登录状态变化信号
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -267,6 +277,24 @@ class UserCenterPanel(QWidget):
         main_layout.addWidget(self.message_label)
         
         self.setLayout(main_layout)
+    
+    def try_auto_login(self):
+        """尝试通过MAC地址自动登录"""
+        result = self.db_manager.auto_login_by_mac()
+        
+        if result['success']:
+            # 自动登录成功
+            self.current_user = result['user']
+            self.update_ui_after_login()
+            
+            # 发送登录状态变化信号
+            self.login_status_changed.emit(True, result['user'])
+            
+            # 显示提示信息
+            QMessageBox.information(self, "自动登录", "已通过设备识别自动登录")
+        else:
+            # 自动登录失败，显示登录对话框
+            self.show_login_dialog()
     
     def show_login_dialog(self):
         """显示登录对话框"""
@@ -482,6 +510,94 @@ class UserCenterPanel(QWidget):
             self.login_status_changed.emit(False, {})
         else:
             QMessageBox.warning(self, "错误", result['message'])
+
+
+class LoginDialog(QDialog):
+    """登录对话框"""
+    
+    login_success = pyqtSignal(object)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.db_manager = UserDatabaseManager()
+        self.setup_ui()
+        
+    def setup_ui(self):
+        """设置界面"""
+        self.setWindowTitle("用户登录")
+        self.setFixedSize(400, 300)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # 邮箱输入
+        email_layout = QHBoxLayout()
+        email_label = QLabel("邮箱:")
+        email_label.setFixedWidth(80)
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("请输入邮箱")
+        email_layout.addWidget(email_label)
+        email_layout.addWidget(self.email_input)
+        layout.addLayout(email_layout)
+        
+        # 密码输入
+        password_layout = QHBoxLayout()
+        password_label = QLabel("密码:")
+        password_label.setFixedWidth(80)
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("请输入密码")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        password_layout.addWidget(password_label)
+        password_layout.addWidget(self.password_input)
+        layout.addLayout(password_layout)
+        
+        # 登录按钮
+        button_layout = QHBoxLayout()
+        self.login_button = QPushButton("登录")
+        self.login_button.setFixedWidth(100)
+        self.login_button.clicked.connect(self.login)
+        
+        self.register_button = QPushButton("注册")
+        self.register_button.setFixedWidth(100)
+        self.register_button.clicked.connect(self.show_register_dialog)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(self.login_button)
+        button_layout.addWidget(self.register_button)
+        button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
+        
+        # 添加垂直空白
+        layout.addStretch()
+    
+    def login(self):
+        """登录"""
+        email = self.email_input.text().strip()
+        password = self.password_input.text().strip()
+        
+        if not email:
+            QMessageBox.warning(self, "提示", "请输入邮箱")
+            return
+        
+        if not password:
+            QMessageBox.warning(self, "提示", "请输入密码")
+            return
+        
+        # 登录
+        result = self.db_manager.login(email, password)
+        
+        if result['success']:
+            self.login_success.emit(result['user'])
+            self.accept()
+        else:
+            QMessageBox.warning(self, "登录失败", result['message'])
+    
+    def show_register_dialog(self):
+        """显示注册对话框"""
+        register_dialog = RegisterDialog(self)
+        register_dialog.exec()
 
 
 if __name__ == "__main__":

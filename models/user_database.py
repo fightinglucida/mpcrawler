@@ -1,21 +1,28 @@
 import os
 import uuid
-import hashlib
-import socket
+import bcrypt
 import getpass
+import platform
+import uuid
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 import supabase
 
 class UserDatabaseManager:
-    """用户版本的数据库管理器，只包含用户相关功能"""
+    """用户数据库管理器"""
     
     def __init__(self):
+        """初始化"""
         # 从环境变量获取Supabase配置
         self.supabase_url = os.getenv('SUPABASE_URL')
         self.supabase_key = os.getenv('SUPABASE_KEY')
         
         # 初始化Supabase客户端
         self.supabase = supabase.create_client(self.supabase_url, self.supabase_key)
+        
+        # MAC地址存储路径
+        self.mac_store_path = os.path.join(os.path.expanduser("~"), ".gzh_mac_store.json")
     
     def _hash_password(self, password):
         """对密码进行哈希处理
@@ -26,9 +33,9 @@ class UserDatabaseManager:
         Returns:
             str: 哈希后的密码
         """
-        salt = uuid.uuid4().hex
-        hashed_password = hashlib.sha256(salt.encode() + password.encode()).hexdigest()
-        return f"{salt}${hashed_password}"
+        salt = bcrypt.gensalt()
+        hashed_password = bcrypt.hashpw(password.encode(), salt)
+        return hashed_password.decode()
     
     def _verify_password(self, password, hashed_password):
         """验证密码
@@ -40,32 +47,67 @@ class UserDatabaseManager:
         Returns:
             bool: 密码是否正确
         """
-        salt, stored_hash = hashed_password.split('$')
-        calculated_hash = hashlib.sha256(salt.encode() + password.encode()).hexdigest()
-        return calculated_hash == stored_hash
+        return bcrypt.checkpw(password.encode(), hashed_password.encode())
     
     def _get_current_mac(self):
-        """获取当前设备MAC地址
+        """获取当前MAC地址"""
+        try:
+            if platform.system() == 'Windows':
+                for line in os.popen("getmac /fo csv /nh"):
+                    mac = line.split(',')[0].strip('"')
+                    return mac
+            elif platform.system() == 'Darwin':  # macOS
+                for line in os.popen("ifconfig en0 | grep ether"):
+                    return line.strip().split()[1]
+            elif platform.system() == 'Linux':
+                for line in os.popen("ip link show | grep link/ether"):
+                    return line.strip().split()[1]
+            return "unknown"
+        except Exception as e:
+            print(f"获取MAC地址时发生错误: {str(e)}")
+            return "unknown"
+    
+    def _save_mac_for_user(self, user_id, mac_address):
+        """保存用户的MAC地址到本地
         
+        Args:
+            user_id: 用户ID
+            mac_address: MAC地址
+        """
+        try:
+            mac_data = {}
+            if os.path.exists(self.mac_store_path):
+                with open(self.mac_store_path, 'r') as f:
+                    mac_data = json.load(f)
+            
+            mac_data[user_id] = mac_address
+            
+            with open(self.mac_store_path, 'w') as f:
+                json.dump(mac_data, f)
+                
+            return True
+        except Exception as e:
+            print(f"保存MAC地址时发生错误: {str(e)}")
+            return False
+    
+    def _get_mac_for_user(self, user_id):
+        """获取用户的MAC地址
+        
+        Args:
+            user_id: 用户ID
+            
         Returns:
             str: MAC地址
         """
         try:
-            # 获取主机名
-            hostname = socket.gethostname()
-            # 获取IP地址
-            ip_address = socket.gethostbyname(hostname)
-            # 获取用户名
-            username = getpass.getuser()
-            
-            # 组合设备标识
-            device_id = f"{hostname}_{ip_address}_{username}"
-            
-            # 哈希处理
-            return hashlib.md5(device_id.encode()).hexdigest()
+            if os.path.exists(self.mac_store_path):
+                with open(self.mac_store_path, 'r') as f:
+                    mac_data = json.load(f)
+                    return mac_data.get(user_id)
+            return None
         except Exception as e:
             print(f"获取MAC地址时发生错误: {str(e)}")
-            return hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()
+            return None
     
     # ===== 用户相关方法 =====
     
@@ -92,20 +134,48 @@ class UserDatabaseManager:
             if not self._verify_password(password, user.get('password', '')):
                 return {'success': False, 'message': '密码错误', 'user': None}
             
+            # 获取当前MAC地址
+            current_mac = self._get_current_mac()
+            user_id = user.get('id')
+            
+            # 检查用户是否有MAC地址
+            user_mac = user.get('mac')
+            if not user_mac:
+                # 首次登录，更新MAC地址
+                self.supabase.table('users').update({
+                    'mac': current_mac,
+                    'last_login_time': datetime.now().isoformat(),
+                    'last_login_ip': self._get_ip_address()
+                }).eq('id', user_id).execute()
+                
+                # 重新获取用户信息
+                result = self.supabase.table('users').select('*').eq('id', user_id).execute()
+                if result.data:
+                    user = result.data[0]
+            else:
+                # 验证MAC地址
+                if user_mac != current_mac:
+                    return {'success': False, 'message': '登录失败，请不要更换设备使用', 'user': None}
+                
+                # 更新登录时间和IP
+                self.supabase.table('users').update({
+                    'last_login_time': datetime.now().isoformat(),
+                    'last_login_ip': self._get_ip_address()
+                }).eq('id', user_id).execute()
+            
             return {'success': True, 'message': '登录成功', 'user': user}
             
         except Exception as e:
             print(f"登录时发生错误: {str(e)}")
             return {'success': False, 'message': f'登录失败: {str(e)}', 'user': None}
     
-    def register_user(self, email, password, nickname, mac_address=None):
+    def register_user(self, email, password, nickname):
         """注册用户
         
         Args:
             email: 邮箱
             password: 密码
             nickname: 昵称
-            mac_address: MAC地址（不使用）
             
         Returns:
             dict: 注册结果
@@ -133,7 +203,8 @@ class UserDatabaseManager:
                 'id': user_id,
                 'email': email,
                 'password': hashed_password,
-                'nickname': nickname
+                'nickname': nickname,
+                'role': '1'  # 普通用户角色
             }).execute()
             
             return {'success': True, 'message': '注册成功'}
@@ -314,3 +385,44 @@ class UserDatabaseManager:
         except Exception as e:
             print(f"修改密码时发生错误: {str(e)}")
             return {'success': False, 'message': f'修改失败: {str(e)}'}
+    
+    def auto_login_by_mac(self):
+        """通过MAC地址自动登录
+        
+        Returns:
+            dict: 登录结果
+        """
+        try:
+            # 获取当前MAC地址
+            current_mac = self._get_current_mac()
+            
+            # 查询用户
+            result = self.supabase.table('users').select('*').eq('mac', current_mac).execute()
+            
+            if not result.data:
+                return {'success': False, 'message': '未找到匹配的设备', 'user': None}
+            
+            user = result.data[0]
+            
+            # 更新登录时间和IP
+            self.supabase.table('users').update({
+                'last_login_time': datetime.now().isoformat(),
+                'last_login_ip': self._get_ip_address()
+            }).eq('id', user.get('id')).execute()
+            
+            return {'success': True, 'message': '自动登录成功', 'user': user}
+            
+        except Exception as e:
+            print(f"自动登录时发生错误: {str(e)}")
+            return {'success': False, 'message': f'自动登录失败: {str(e)}', 'user': None}
+    
+    def _get_ip_address(self):
+        """获取当前IP地址"""
+        try:
+            import socket
+            hostname = socket.gethostname()
+            ip_address = socket.gethostbyname(hostname)
+            return ip_address
+        except Exception as e:
+            print(f"获取IP地址时发生错误: {str(e)}")
+            return "unknown"
