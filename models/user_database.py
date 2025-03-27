@@ -270,22 +270,20 @@ class UserDatabaseManager:
                     'activation_status': '未知',
                     'code': activation_code,
                     'activation_time': '',
-                    'expiry_date': user.get('expiry_date', '')
+                    'expiry_date': user.get('expired_time', '')
                 }}
             
             # 返回激活码信息
             code = code_result.data[0]
-            
-            activation_status = '已激活' if code.get('used') else '未激活'
             
             return {
                 'success': True,
                 'message': '获取成功',
                 'data': {
                     'code': activation_code,
-                    'activation_status': activation_status,
-                    'activation_time': code.get('used_at', ''),
-                    'expiry_date': user.get('expiry_date', '')
+                    'activation_status': code.get('activation_status', '未激活'),
+                    'activation_time': code.get('activation_time', ''),
+                    'expiry_date': code.get('expiry_date', '') or user.get('expired_time', '')
                 }
             }
             
@@ -312,6 +310,7 @@ class UserDatabaseManager:
                 return {'success': False, 'message': '用户不存在'}
             
             user = user_result.data[0]
+            user_email = user.get('email')
             
             # 检查激活码是否存在
             code_result = self.supabase.table('activation_codes').select('*').eq('code', activation_code).execute()
@@ -322,24 +321,65 @@ class UserDatabaseManager:
             code = code_result.data[0]
             
             # 检查激活码状态
-            if code.get('used') == True:
-                return {'success': False, 'message': '激活码已被使用'}
+            activation_status = code.get('activation_status', '')
+            if activation_status != '未激活' and activation_status != '':
+                if activation_status == '已激活':
+                    return {'success': False, 'message': '激活码已被使用'}
+                elif activation_status == '已过期':
+                    return {'success': False, 'message': '激活码已过期'}
+                else:
+                    return {'success': False, 'message': f'激活码状态异常: {activation_status}'}
             
-            # 计算过期时间
-            duration_days = code.get('duration_days', 30)
-            expiry_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
+            # 检查激活码是否已过期
+            expiry_date = code.get('expiry_date', '')
+            if expiry_date:
+                try:
+                    # 处理不同格式的日期字符串
+                    if 'T' in expiry_date:
+                        # 处理带时区的ISO格式
+                        if '+' in expiry_date:
+                            expiry_date = expiry_date.split('+')[0]
+                        # 处理带毫秒的格式
+                        if '.' in expiry_date:
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S.%f')
+                        else:
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S')
+                    else:
+                        expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%d')
+                    
+                    # 获取当前时间
+                    current_datetime = datetime.now()
+                    
+                    # 检查是否过期
+                    if current_datetime > expiry_datetime:
+                        # 更新激活码状态为已过期
+                        self.supabase.table('activation_codes').update({
+                            'activation_status': '已过期',
+                            'update_time': current_datetime.isoformat()
+                        }).eq('id', code.get('id')).execute()
+                        
+                        return {'success': False, 'message': '激活码已过期'}
+                except Exception as e:
+                    print(f"检查激活码过期时间时发生错误: {str(e)}")
+            
+            # 计算过期时间（默认30天）
+            current_time = datetime.now()
+            expiry_date = (current_time + timedelta(days=30)).isoformat()
             
             # 更新激活码信息
             self.supabase.table('activation_codes').update({
-                'used': True,
-                'used_by': user_id,
-                'used_at': datetime.now().isoformat()
+                'user_email': user_email,
+                'activation_status': '已激活',
+                'activation_time': current_time.isoformat(),
+                'expiry_date': expiry_date,
+                'update_time': current_time.isoformat()
             }).eq('id', code.get('id')).execute()
             
             # 更新用户信息
             self.supabase.table('users').update({
                 'activation_code': activation_code,
-                'expiry_date': expiry_date
+                'activation_status': '已激活',
+                'expired_time': expiry_date
             }).eq('id', user_id).execute()
             
             return {'success': True, 'message': '激活成功', 'expiry_date': expiry_date}
@@ -426,3 +466,36 @@ class UserDatabaseManager:
         except Exception as e:
             print(f"获取IP地址时发生错误: {str(e)}")
             return "unknown"
+    
+    def update_activation_status(self, user_id, activation_code, status):
+        """更新激活状态
+        
+        Args:
+            user_id: 用户ID
+            activation_code: 激活码
+            status: 激活状态（未激活/已激活/已过期）
+            
+        Returns:
+            dict: 更新结果
+        """
+        try:
+            current_time = datetime.now().isoformat()
+            
+            # 更新用户表中的激活状态
+            self.supabase.table('users').update({
+                'activation_status': status,
+                'update_time': current_time
+            }).eq('id', user_id).execute()
+            
+            # 如果有激活码，也更新激活码表中的状态
+            if activation_code:
+                self.supabase.table('activation_codes').update({
+                    'activation_status': status,
+                    'update_time': current_time
+                }).eq('code', activation_code).execute()
+            
+            return {'success': True, 'message': '激活状态更新成功'}
+            
+        except Exception as e:
+            print(f"更新激活状态时发生错误: {str(e)}")
+            return {'success': False, 'message': f'更新失败: {str(e)}'}

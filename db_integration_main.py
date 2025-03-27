@@ -17,7 +17,7 @@ class IntegratedApp(QMainWindow):
         super().__init__()
         
         # 设置窗口标题和大小
-        self.setWindowTitle("公众号采集与下载助手 (数据库版)")
+        self.setWindowTitle("后台账号管理 (数据库版)")
         self.setMinimumSize(1200, 800)
         
         # 设置窗口图标

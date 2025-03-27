@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QMessageBox,
                              QGridLayout, QDialog)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QPixmap
+from datetime import datetime
 
 # 导入现有模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -21,20 +22,19 @@ class UserApp(QMainWindow):
         super().__init__()
         
         # 设置窗口标题和大小
-        self.setWindowTitle("公众号采集与下载助手 (用户版)")
+        self.setWindowTitle("公众号采集与下载助手 V1.0 ")
         self.setMinimumSize(1200, 800)
         
         # 设置窗口图标
         icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.svg")
         self.setWindowIcon(QIcon(icon_path))
         
+        # 创建状态栏
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        
         # 创建数据库管理器
         self.db_manager = UserDatabaseManager()
-        
-        # 创建状态栏
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("欢迎使用公众号采集与下载助手")
         
         # 创建选项卡部件
         self.tab_widget = QTabWidget()
@@ -70,7 +70,8 @@ class UserApp(QMainWindow):
         if result['success']:
             # 自动登录成功
             self.user_center.on_login_success(result['user'])
-            QMessageBox.information(self, "自动登录", "已通过设备识别自动登录")
+            # 在状态栏显示提示信息
+            self.status_bar.showMessage("已通过设备识别自动登录", 5000)  # 显示5秒
         else:
             # 自动登录失败，显示登录对话框
             self.user_center.show_login_dialog()
@@ -111,7 +112,7 @@ class UserApp(QMainWindow):
             print(f"用户登录成功: {user_info.get('nickname', '')}")
             
             # 更新状态栏
-            self.statusBar.showMessage(f"用户已登录: {user_info.get('nickname', '')}")
+            self.status_bar.showMessage(f"用户已登录: {user_info.get('nickname', '')}")
             
             # 更新下载管理器的用户ID
             if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
@@ -125,7 +126,7 @@ class UserApp(QMainWindow):
             print("用户已退出登录")
             
             # 更新状态栏
-            self.statusBar.showMessage("用户未登录")
+            self.status_bar.showMessage("用户未登录")
             
             # 更新下载管理器
             if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
@@ -305,13 +306,79 @@ class UserCenterPanel(QWidget):
     def on_login_success(self, user_info):
         """登录成功回调"""
         self.current_user = user_info
-        self.update_ui_after_login()
+        self.user_id = user_info.get('id')
         
-        # 获取用户激活信息
-        self.get_activation_info()
+        # 检查激活状态和过期时间
+        self.check_activation_status()
+        
+        # 更新UI
+        self.update_ui_after_login()
         
         # 发送登录状态变化信号
         self.login_status_changed.emit(True, user_info)
+    
+    def check_activation_status(self):
+        """检查激活状态和过期时间"""
+        if not self.current_user:
+            return
+            
+        # 获取用户激活信息
+        activation_code = self.current_user.get('activation_code', '')
+        if not activation_code:
+            return
+            
+        result = self.db_manager.get_user_activation_info(self.user_id)
+        
+        if result['success']:
+            data = result['data']
+            activation_status = data.get('activation_status', '')
+            expiry_date = data.get('expiry_date', '')
+            
+            # 如果已经是过期状态，不需要再检查
+            if activation_status == '已过期':
+                return
+                
+            # 只有已激活状态才需要检查是否过期
+            if activation_status == '已激活' and expiry_date:
+                # 将过期时间转换为datetime对象
+                try:
+                    # 处理不同格式的日期字符串
+                    if 'T' in expiry_date:
+                        # 处理带时区的ISO格式
+                        if '+' in expiry_date:
+                            expiry_date = expiry_date.split('+')[0]
+                        # 处理带毫秒的格式
+                        if '.' in expiry_date:
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S.%f')
+                        else:
+                            expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%dT%H:%M:%S')
+                    else:
+                        expiry_datetime = datetime.strptime(expiry_date, '%Y-%m-%d')
+                        
+                    # 获取当前时间
+                    current_datetime = datetime.now()
+                    
+                    # 检查是否过期
+                    if current_datetime > expiry_datetime:
+                        # 已过期，更新激活状态
+                        update_result = self.db_manager.update_activation_status(
+                            self.user_id, 
+                            activation_code, 
+                            '已过期'
+                        )
+                        
+                        if update_result['success']:
+                            # 在状态栏显示提示
+                            self.parent().status_bar.showMessage("您的激活码已过期，请重新激活", 5000)
+                        
+                        # 重新获取用户信息
+                        updated_user = self.db_manager.get_user_by_id(self.user_id)
+                        if updated_user['success']:
+                            self.current_user = updated_user['user']
+                            # 更新UI
+                            self.update_ui_after_login()
+                except Exception as e:
+                    print(f"检查激活状态时发生错误: {str(e)}")
     
     def update_ui_after_login(self):
         """登录后更新UI"""
@@ -330,7 +397,6 @@ class UserCenterPanel(QWidget):
             self.change_password_button.setEnabled(True)
             
             # 获取激活信息
-            self.user_id = self.current_user.get('id')
             self.get_activation_info()
         else:
             self.reset_ui()
@@ -554,6 +620,7 @@ class LoginDialog(QDialog):
         
         # 登录按钮
         button_layout = QHBoxLayout()
+        
         self.login_button = QPushButton("登录")
         self.login_button.setFixedWidth(100)
         self.login_button.clicked.connect(self.login)
