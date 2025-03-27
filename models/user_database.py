@@ -362,9 +362,14 @@ class UserDatabaseManager:
                 except Exception as e:
                     print(f"检查激活码过期时间时发生错误: {str(e)}")
             
-            # 计算过期时间（默认30天）
+            # 获取当前时间
             current_time = datetime.now()
-            expiry_date = (current_time + timedelta(days=30)).isoformat()
+            
+            # 从激活码获取有效天数，默认为30天
+            valid_days = code.get('valid_days', 30)
+            
+            # 计算过期时间
+            expiry_date = (current_time + timedelta(days=valid_days)).isoformat()
             
             # 更新激活码信息
             self.supabase.table('activation_codes').update({

@@ -541,15 +541,16 @@ class DatabaseManager:
             # 生成激活码
             activation_code = str(uuid.uuid4()).replace('-', '')[:16].upper()
             
-            # 创建激活码记录
-            expiry_date = datetime.now() + timedelta(days=duration_days)
+            # 获取当前时间
+            current_time = datetime.now().isoformat()
             
+            # 创建激活码记录，不设置过期时间
             code_data = {
                 'code': activation_code,
                 'activation_status': '未激活',
-                'expiry_date': expiry_date.isoformat(),
-                'create_time': datetime.now().isoformat(),
-                'update_time': datetime.now().isoformat()
+                'valid_days': duration_days,  # 添加有效期天数字段
+                'create_time': current_time,
+                'update_time': current_time
             }
             
             self.supabase.table('activation_codes').insert(code_data).execute()
@@ -678,12 +679,13 @@ class DatabaseManager:
             print(f"获取激活码时发生错误: {str(e)}")
             return {'success': False, 'message': f'获取激活码失败: {str(e)}'}
     
-    def update_activation_code(self, code_id, expiry_date=None):
+    def update_activation_code(self, code_id, expiry_date=None, valid_days=None):
         """更新激活码
         
         Args:
             code_id: 激活码ID
             expiry_date: 新的过期时间
+            valid_days: 新的有效期天数
             
         Returns:
             dict: 更新结果
@@ -695,22 +697,28 @@ class DatabaseManager:
             if not code_result.data:
                 return {'success': False, 'message': '激活码不存在'}
             
+            # 更新激活码数据
             update_data = {
                 'update_time': datetime.now().isoformat()
             }
             
             if expiry_date:
                 update_data['expiry_date'] = expiry_date
+                
+            if valid_days:
+                try:
+                    # 确保valid_days是整数
+                    valid_days_int = int(valid_days)
+                    update_data['valid_days'] = valid_days_int
+                except ValueError:
+                    return {'success': False, 'message': '有效期天数必须是整数'}
             
-            result = self.supabase.table('activation_codes').update(update_data).eq('id', code_id).execute()
-            
-            if not result.data:
-                return {'success': False, 'message': '更新激活码失败'}
+            # 更新激活码表
+            self.supabase.table('activation_codes').update(update_data).eq('id', code_id).execute()
             
             return {
                 'success': True,
-                'message': '激活码更新成功',
-                'code': result.data[0]
+                'message': '更新成功'
             }
             
         except Exception as e:

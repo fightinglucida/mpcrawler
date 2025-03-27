@@ -365,6 +365,9 @@ class AdminPanel(QWidget):
         self.user_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.user_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.user_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        # 设置表格内容可选择和复制
+        self.user_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.user_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         
         layout.addWidget(self.user_table)
         
@@ -386,48 +389,49 @@ class AdminPanel(QWidget):
     
     def _create_code_tab(self):
         """创建激活码管理选项卡"""
-        widget = QWidget()
-        layout = QVBoxLayout()
+        code_tab = QWidget()
+        layout = QVBoxLayout(code_tab)
         
-        # 激活码列表
+        # 顶部按钮区域
+        top_layout = QHBoxLayout()
+        
+        # 新增激活码按钮
+        add_code_btn = QPushButton("新增激活码")
+        add_code_btn.setFixedSize(120, 30)
+        add_code_btn.clicked.connect(self.generate_code)
+        top_layout.addWidget(add_code_btn)
+        
+        # 刷新按钮
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.setFixedSize(80, 30)
+        refresh_btn.clicked.connect(self.refresh_codes)
+        top_layout.addWidget(refresh_btn)
+        
+        top_layout.addStretch()
+        layout.addLayout(top_layout)
+        
+        # 激活码表格
         self.code_table = QTableWidget()
-        self.code_table.setColumnCount(8)
-        self.code_table.setHorizontalHeaderLabels([
-            "操作", "激活码", "用户邮箱", "激活状态", "过期时间", "激活时间", "创建时间", "更新时间"
-        ])
+        self.code_table.setColumnCount(9)
+        self.code_table.setHorizontalHeaderLabels(["操作", "激活码", "用户邮箱", "激活状态", "有效期(天)", "过期时间", "激活时间", "创建时间", "更新时间"])
+        
+        # 设置表格样式
+        self.code_table.setAlternatingRowColors(True)
+        self.code_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.code_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.code_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        # 设置表格内容可选择和复制
+        self.code_table.setTextElideMode(Qt.TextElideMode.ElideNone)
         
         # 设置列宽
-        self.code_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.code_table.setColumnWidth(0, 150)  # 操作列宽度增加
-        self.code_table.setColumnWidth(1, 180)  # 激活码列宽度适中
-        self.code_table.setColumnWidth(2, 200)  # 用户邮箱
-        self.code_table.setColumnWidth(3, 100)  # 激活状态
-        self.code_table.setColumnWidth(4, 150)  # 过期时间
-        self.code_table.setColumnWidth(5, 150)  # 激活时间
-        self.code_table.setColumnWidth(6, 150)  # 创建时间
-        self.code_table.setColumnWidth(7, 150)  # 更新时间
-        
-        # 设置选择行为和编辑触发器
-        self.code_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.code_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.code_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.code_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.code_table.setColumnWidth(0, 120)
         
         layout.addWidget(self.code_table)
         
-        # 按钮区域
-        button_layout = QHBoxLayout()
-        
-        self.add_code_button = QPushButton("新增激活码")
-        self.add_code_button.clicked.connect(self.generate_code)
-        button_layout.addWidget(self.add_code_button)
-        
-        self.refresh_code_button = QPushButton("刷新")
-        self.refresh_code_button.clicked.connect(self.refresh_codes)
-        button_layout.addWidget(self.refresh_code_button)
-        
-        layout.addLayout(button_layout)
-        
-        widget.setLayout(layout)
-        return widget
+        # 添加到选项卡
+        self.tab_widget.addTab(code_tab, "激活码管理")
     
     def handle_login(self):
         """处理登录"""
@@ -596,19 +600,89 @@ class AdminPanel(QWidget):
     
     def refresh_codes(self):
         """刷新激活码列表"""
-        if not self.admin_info:
-            return
-            
         try:
             result = self.db_manager.get_activation_codes()
             
-            if result['success']:
-                self.display_codes(result['codes'])
-            else:
-                QMessageBox.warning(self, "获取激活码失败", result['message'])
+            if not result['success']:
+                QMessageBox.warning(self, "获取失败", result.get('message', '获取激活码列表失败'))
+                return
+                
+            codes = result.get('codes', [])
+            
+            # 清空表格
+            self.code_table.setRowCount(0)
+            
+            # 填充数据
+            for row, code in enumerate(codes):
+                self.code_table.insertRow(row)
+                
+                # 操作按钮
+                operation_widget = QWidget()
+                operation_layout = QHBoxLayout(operation_widget)
+                operation_layout.setContentsMargins(5, 2, 5, 2)
+                operation_layout.setSpacing(5)
+                
+                edit_button = QPushButton("编辑")
+                edit_button.setFixedSize(50, 25)
+                edit_button.clicked.connect(lambda checked, code_id=code.get('id'): self.edit_code(code_id))
+                
+                delete_button = QPushButton("删除")
+                delete_button.setFixedSize(50, 25)
+                delete_button.clicked.connect(lambda checked, code_id=code.get('id'): self.delete_code(code_id))
+                
+                operation_layout.addWidget(edit_button)
+                operation_layout.addWidget(delete_button)
+                
+                self.code_table.setCellWidget(row, 0, operation_widget)
+                
+                # 其他数据
+                self.code_table.setItem(row, 1, QTableWidgetItem(code.get('code', '')))
+                self.code_table.setItem(row, 2, QTableWidgetItem(code.get('user_email', '')))
+                self.code_table.setItem(row, 3, QTableWidgetItem(code.get('activation_status', '未激活')))
+                self.code_table.setItem(row, 4, QTableWidgetItem(str(code.get('valid_days', ''))))
+                
+                # 格式化过期时间
+                expiry_date = code.get('expiry_date', '')
+                if expiry_date:
+                    try:
+                        date_obj = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                        expiry_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception as e:
+                        print(f"日期解析错误: {str(e)}")
+                self.code_table.setItem(row, 5, QTableWidgetItem(expiry_date))
+                
+                # 格式化激活时间
+                activation_time = code.get('activation_time', '')
+                if activation_time:
+                    try:
+                        date_obj = datetime.fromisoformat(activation_time.replace('Z', '+00:00'))
+                        activation_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception as e:
+                        print(f"日期解析错误: {str(e)}")
+                self.code_table.setItem(row, 6, QTableWidgetItem(activation_time))
+                
+                # 格式化创建时间
+                create_time = code.get('create_time', '')
+                if create_time:
+                    try:
+                        date_obj = datetime.fromisoformat(create_time.replace('Z', '+00:00'))
+                        create_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception as e:
+                        print(f"日期解析错误: {str(e)}")
+                self.code_table.setItem(row, 7, QTableWidgetItem(create_time))
+                
+                # 格式化更新时间
+                update_time = code.get('update_time', '')
+                if update_time:
+                    try:
+                        date_obj = datetime.fromisoformat(update_time.replace('Z', '+00:00'))
+                        update_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception as e:
+                        print(f"日期解析错误: {str(e)}")
+                self.code_table.setItem(row, 8, QTableWidgetItem(update_time))
                 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"获取激活码失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"获取激活码列表失败: {str(e)}")
     
     def display_codes(self, codes):
         """显示激活码列表"""
@@ -670,6 +744,7 @@ class AdminPanel(QWidget):
             self.code_table.setItem(row, 1, QTableWidgetItem(code.get('code', '')))
             self.code_table.setItem(row, 2, QTableWidgetItem(code.get('user_email', '')))
             self.code_table.setItem(row, 3, QTableWidgetItem(code.get('activation_status', '未激活')))
+            self.code_table.setItem(row, 4, QTableWidgetItem(str(code.get('duration', ''))))
             
             # 格式化过期时间
             expiry_date = code.get('expiry_date', '')
@@ -679,7 +754,7 @@ class AdminPanel(QWidget):
                     expiry_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
                     print(f"日期解析错误: {str(e)}")
-            self.code_table.setItem(row, 4, QTableWidgetItem(expiry_date))
+            self.code_table.setItem(row, 5, QTableWidgetItem(expiry_date))
             
             # 格式化激活时间
             activation_time = code.get('activation_time', '')
@@ -689,7 +764,7 @@ class AdminPanel(QWidget):
                     activation_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
                     print(f"日期解析错误: {str(e)}")
-            self.code_table.setItem(row, 5, QTableWidgetItem(activation_time))
+            self.code_table.setItem(row, 6, QTableWidgetItem(activation_time))
             
             # 格式化创建时间
             create_time = code.get('create_time', '')
@@ -699,7 +774,7 @@ class AdminPanel(QWidget):
                     create_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
                     print(f"日期解析错误: {str(e)}")
-            self.code_table.setItem(row, 6, QTableWidgetItem(create_time))
+            self.code_table.setItem(row, 7, QTableWidgetItem(create_time))
             
             # 格式化更新时间
             update_time = code.get('update_time', '')
@@ -709,13 +784,13 @@ class AdminPanel(QWidget):
                     update_time = date_obj.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
                     print(f"日期解析错误: {str(e)}")
-            self.code_table.setItem(row, 7, QTableWidgetItem(update_time))
+            self.code_table.setItem(row, 8, QTableWidgetItem(update_time))
     
     def generate_code(self):
         """生成激活码"""
         dialog = QDialog(self)
         dialog.setWindowTitle("新增激活码")
-        dialog.setFixedSize(400, 200)
+        dialog.setFixedSize(400, 250)
         
         layout = QVBoxLayout()
         
@@ -730,10 +805,15 @@ class AdminPanel(QWidget):
         status_label = QLabel("未激活")
         form_layout.addRow("激活状态:", status_label)
         
-        # 有效期输入
+        # 有效期天数输入
         duration_input = QLineEdit()
         duration_input.setText("30")
         form_layout.addRow("有效期(天):", duration_input)
+        
+        # 说明文字
+        note_label = QLabel("注意: 激活码在用户激活时才会设置过期时间，\n过期时间 = 激活时间 + 有效期天数")
+        note_label.setStyleSheet("color: #666; font-size: 9pt;")
+        form_layout.addRow("", note_label)
         
         layout.addLayout(form_layout)
         
@@ -798,6 +878,11 @@ class AdminPanel(QWidget):
             status_label = QLabel(code_data.get('activation_status', '未激活'))
             form_layout.addRow("激活状态:", status_label)
             
+            # 有效期天数（可修改）
+            duration_input = QLineEdit()
+            duration_input.setText(str(code_data.get('valid_days', '')))
+            form_layout.addRow("有效期(天):", duration_input)
+            
             # 过期时间（可修改）
             expiry_date = None
             if code_data.get('expiry_date'):
@@ -861,7 +946,7 @@ class AdminPanel(QWidget):
                     qt_datetime.time().second()
                 )
                 
-                result = self.db_manager.update_activation_code(code_id, expiry_date=new_expiry_date.isoformat())
+                result = self.db_manager.update_activation_code(code_id, expiry_date=new_expiry_date.isoformat(), valid_days=duration_input.text())
                 
                 if result['success']:
                     QMessageBox.information(self, "成功", "激活码更新成功")
