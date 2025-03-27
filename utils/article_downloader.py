@@ -333,14 +333,18 @@ class WeChatArticleDownloader:
             for img in li.find_all('img'):
                 img_src = img.get('src')
                 if img_src and img_src.startswith('./images/'):
-                    result += f'{"    " * (list_element.count_parents("ul", "ol") - 1)}![图片]({img_src})\n'
+                    # 计算嵌套层级
+                    nesting_level = self._count_parents(list_element, ['ul', 'ol'])
+                    result += f'{"    " * (nesting_level - 1)}![图片]({img_src})\n'
                     has_img = True
             
             # 处理列表项文本
             text = self._process_inline_elements(li)
             if text:
                 prefix = f"{i}. " if ordered else "- "
-                indent = "    " * (list_element.count_parents("ul", "ol") - 1)
+                # 计算嵌套层级
+                nesting_level = self._count_parents(list_element, ['ul', 'ol'])
+                indent = "    " * (nesting_level - 1)
                 result += f"{indent}{prefix}{text}\n"
             
             # 处理嵌套列表
@@ -353,6 +357,26 @@ class WeChatArticleDownloader:
                     result += nested_content
         
         return result
+    
+    def _count_parents(self, element, parent_tags):
+        """计算元素的指定父元素数量
+        
+        Args:
+            element: BeautifulSoup对象
+            parent_tags: 要计数的父元素标签列表
+            
+        Returns:
+            int: 父元素数量
+        """
+        count = 0
+        parent = element.parent
+        
+        while parent:
+            if parent.name in parent_tags:
+                count += 1
+            parent = parent.parent
+            
+        return count
     
     def _process_blockquote(self, blockquote):
         """处理引用元素

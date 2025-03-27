@@ -4,15 +4,44 @@ import time
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QFileDialog, QGroupBox, QCheckBox, QDialog, QMessageBox, QFrame, QStatusBar,
-                             QSizePolicy)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+                             QSizePolicy, QProgressBar, QScrollArea, QAbstractItemView)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QPixmap, QIcon, QFont, QImage
 from utils import get_wechat_login
 import requests
 from utils.search_thread import SearchThread
 import pandas as pd
 import os.path
-from utils.article_downloader import ArticleDownloadManager
+from utils.article_downloader import ArticleDownloadManager, WeChatArticleDownloader
+
+class SingleArticleDownloader(QObject):
+    download_complete = pyqtSignal(str)
+    download_error = pyqtSignal(str)
+    download_progress = pyqtSignal(str)
+
+    def __init__(self, article_url, download_path):
+        super().__init__()
+        self.article_url = article_url
+        self.download_path = download_path
+
+    def download(self):
+        try:
+            # 创建下载目录
+            os.makedirs(self.download_path, exist_ok=True)
+            
+            # 使用WeChatArticleDownloader下载文章
+            self.download_progress.emit("正在下载文章...")
+            downloader = WeChatArticleDownloader(self.download_path)
+            
+            # 下载文章
+            success, file_path = downloader.download_article(self.article_url)
+            
+            if success:
+                self.download_complete.emit(file_path)
+            else:
+                self.download_error.emit("文章下载失败，请检查链接是否正确")
+        except Exception as e:
+            self.download_error.emit(f"下载出错：{str(e)}")
 
 class LoginThread(QThread):
     """登录线程，避免UI卡顿"""
@@ -207,6 +236,78 @@ class WechatCollectorUI(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # 全局样式设置
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f8f9fa;
+            }
+            QWidget {
+                font-family: 'Microsoft YaHei';
+            }
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 5px;
+                padding-top: 3px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QPushButton {
+                background-color: #f0f0f0;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 3px 10px;  
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+                min-height: 24px;  
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: #ffffff;
+                font-family: 'Microsoft YaHei';
+                min-height: 25px;
+            }
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+            }
+            QTableWidget {
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                background-color: #ffffff;
+                gridline-color: #f0f0f0;
+                selection-background-color: #e8f0fe;
+                selection-color: #333333;
+            }
+            QTableWidget::item {
+                padding: 5px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QHeaderView::section {
+                background-color: #f5f5f5;
+                padding: 5px;
+                border: none;
+                border-right: 1px solid #e0e0e0;
+                border-bottom: 1px solid #e0e0e0;
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                color: #333333;
+            }
+        """)
+        
         # 设置窗口标题和大小
         self.setWindowTitle("公众号采集与下载助手")
         self.setMinimumSize(1200, 800)
@@ -220,60 +321,36 @@ class WechatCollectorUI(QMainWindow):
         
         # 创建主布局
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(5, 5, 5, 5)  # 设置主布局边距
+        main_layout.setSpacing(5)  # 设置主布局间距
         
         # 创建顶部布局
         top_layout = QHBoxLayout()
+        top_layout.setSpacing(5)  # 设置顶部布局间距
         
-        # 创建登录状态区域
-        login_group = QGroupBox("登录状态")
-        login_layout = QHBoxLayout()
-        login_group.setFixedWidth(200)  # 设置固定宽度
+        # 创建合并的登录状态和账号信息区域
+        self.create_login_section(top_layout)
         
-        self.login_status_label = QLabel("未登录")
-        self.login_button = QPushButton("登录")
-        self.login_button.clicked.connect(self.handle_login)
-        
-        login_layout.addWidget(self.login_status_label)
-        login_layout.addWidget(self.login_button)
-        login_group.setLayout(login_layout)
-        
-        # 创建搜索区域
-        search_group = QGroupBox("公众号搜索")
-        search_layout = QHBoxLayout()
-        search_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)  # 允许搜索区域扩展
-        
-        search_layout.addWidget(QLabel("公众号名称:"))
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("请输入要搜索的微信公众号")
-        search_layout.addWidget(self.search_input)
-        
-        search_layout.addWidget(QLabel("文章数量:"))
-        self.search_count_input = QLineEdit("0")  # 默认为0表示搜索全部
-        self.search_count_input.setFixedWidth(60)
-        self.search_count_input.setToolTip("0表示搜索全部文章")
-        search_layout.addWidget(self.search_count_input)
-        
-        self.search_button = QPushButton("搜索")
-        self.search_button.clicked.connect(self.search_official_account)
-        search_layout.addWidget(self.search_button)
-        
-        search_group.setLayout(search_layout)
-        
-        # 将登录状态和搜索区域添加到顶部布局
-        top_layout.addWidget(login_group)
-        top_layout.addWidget(search_group)
+        # 创建合并的公众号搜索和信息区域
+        self.create_search_account_section(top_layout)
         
         # 将顶部布局添加到主布局
         main_layout.addLayout(top_layout)
         
-        # 创建公众号信息显示区域
-        self.create_account_info_section(main_layout)
-        
         # 创建文章列表区域
         self.create_article_list_section(main_layout)
         
-        # 创建导出和下载设置区域
-        self.create_export_download_section(main_layout)
+        setting_layout = QHBoxLayout()
+        setting_layout.setSpacing(5)  # 设置设置布局间距
+        
+
+        # 创建导出设置区域
+        self.create_export_section(setting_layout)
+        
+        # 创建合并的下载设置和控制区域
+        self.create_download_section(setting_layout)
+
+        main_layout.addLayout(setting_layout)
         
         # 创建状态栏
         self.statusBar = QStatusBar()
@@ -291,236 +368,302 @@ class WechatCollectorUI(QMainWindow):
         # 初始状态下禁用所有功能，等待登录检查
         self.disable_all_features()
     
-    def create_account_info_section(self, parent_layout):
-        """创建公众号信息显示区域"""
-        # 创建水平布局来放置两个信息区域
-        account_info_layout = QHBoxLayout()
-        account_info_layout.setContentsMargins(10, 5, 10, 5)  # 减小外边距
-        
-        # 左侧：登录账号信息
-        login_group = QGroupBox("登录账号")
-        login_group.setFixedHeight(80)  # 设置固定高度
-        login_layout = QHBoxLayout()
-        login_layout.setContentsMargins(5, 5, 5, 5)  # 减小内边距
-        
-        # 登录账号头像
-        self.login_avatar_label = QLabel()
-        self.login_avatar_label.setFixedSize(40, 40)  # 统一头像大小
-        self.login_avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.login_avatar_label.setFrameShape(QFrame.Shape.Box)
-        self.login_avatar_label.setText("头像")
-        login_layout.addWidget(self.login_avatar_label)
-        
-        # 登录账号名称
-        login_name_layout = QVBoxLayout()
-        login_name_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)  # 垂直居中
-        self.login_name_label = QLabel("登录公众号名称")
-        self.login_name_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        login_name_layout.addWidget(self.login_name_label)
-        login_layout.addLayout(login_name_layout)
-        
-        login_group.setLayout(login_layout)
-        account_info_layout.addWidget(login_group)
-        
-        # 右侧：目标公众号信息
-        target_group = QGroupBox("公众号信息")
-        # target_group.setFixedHeight(80)  # 设置固定高度
-        target_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)  # 允许搜索区域扩展
-        target_layout = QHBoxLayout()
-        target_layout.setContentsMargins(5, 5, 5, 5)  # 减小内边距
-        
-        # 目标公众号头像和基本信息
-        left_layout = QHBoxLayout()
-        
-        # 目标公众号头像
-        self.avatar_label = QLabel()
-        self.avatar_label.setFixedSize(40, 40)  # 统一头像大小
-        self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.avatar_label.setFrameShape(QFrame.Shape.Box)
-        self.avatar_label.setText("头像")
-        left_layout.addWidget(self.avatar_label)
-        
-        # 目标公众号名称和文章数
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)  # 减小间距
-        self.account_name_label = QLabel("公众号名称")
-        self.account_name_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        self.article_count_label = QLabel("文章总数: 0")
-        self.article_count_label.setFont(QFont("Arial", 9))
-        self.article_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 统一对齐方式
-        info_layout.addWidget(self.account_name_label)
-        info_layout.addWidget(self.article_count_label)
-        left_layout.addLayout(info_layout)
-        
-        # 下载统计
-        right_layout = QHBoxLayout()
-        right_layout.setSpacing(10)  # 减小间距
-        
-        # 下载成功数
-        success_layout = QVBoxLayout()
-        success_layout.setSpacing(2)  # 减小间距
-        self.success_count_label = QLabel("下载成功")
-        self.success_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.success_count_label.setFont(QFont("Arial", 9))  # 调整字体大小
-        self.success_count_value = QLabel("0")
-        self.success_count_value.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # 调整字体大小
-        self.success_count_value.setStyleSheet("color: green;")
-        self.success_count_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        success_layout.addWidget(self.success_count_label)
-        success_layout.addWidget(self.success_count_value)
-        right_layout.addLayout(success_layout)
-        
-        # 下载失败数
-        failed_layout = QVBoxLayout()
-        failed_layout.setSpacing(2)  # 减小间距
-        self.failed_count_label = QLabel("下载失败")
-        self.failed_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.failed_count_label.setFont(QFont("Arial", 9))  # 调整字体大小
-        self.failed_count_value = QLabel("0")
-        self.failed_count_value.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # 调整字体大小
-        self.failed_count_value.setStyleSheet("color: red;")
-        self.failed_count_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        failed_layout.addWidget(self.failed_count_label)
-        failed_layout.addWidget(self.failed_count_value)
-        right_layout.addLayout(failed_layout)
-        
-        # 将左右两侧添加到目标公众号布局
-        target_layout.addLayout(left_layout, 2)
-        target_layout.addStretch(1)  # 添加弹性空间
-        target_layout.addLayout(right_layout, 1)
-        
-        target_group.setLayout(target_layout)
-        account_info_layout.addWidget(target_group)
-        
-        # 将整个布局添加到父布局
-        parent_layout.addLayout(account_info_layout)
-    
-    def create_account_info_section(self, parent_layout):
-        """创建公众号信息显示区域"""
-        # 创建水平布局来放置两个信息区域
-        account_info_layout = QHBoxLayout()
-        account_info_layout.setSpacing(20)  # 设置两个区域之间的间距
-        
+    def create_login_section(self, parent_layout):
+        """创建合并的登录状态和账号信息区域"""
         # 统一的样式设置
-        AVATAR_SIZE = 40
-        GROUP_HEIGHT = 80
-        PADDING = 10
-        SPACING = 5
+        GROUP_STYLE = """
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """
         
-        # 左侧：登录账号信息
-        login_group = QGroupBox("登录账号")
-        login_group.setFixedHeight(GROUP_HEIGHT)
-        login_group.setFixedWidth(200)
-        login_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        login_layout = QHBoxLayout()
-        login_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
-        login_layout.setSpacing(SPACING)
+        login_group = QGroupBox("登录状态和账号信息")
+        login_group.setStyleSheet(GROUP_STYLE)
+        login_layout = QVBoxLayout()
+        login_layout.setContentsMargins(20, 5, 20, 5)  # 增加内边距
+        login_layout.setSpacing(10)  # 增加控件间距
+
+        login_static_layout = QHBoxLayout()
+        login_static_layout.setSpacing(10)  # 增加控件间距
+
+        login_info_layout = QHBoxLayout()
+        login_info_layout.setSpacing(10)  # 增加控件间距
         
-        # 登录账号头像
+        # 登录状态
+        self.login_status_label = QLabel("未登录")
+        self.login_status_label.setFont(QFont("Microsoft YaHei", 9))
+        self.login_status_label.setStyleSheet("color: #e74c3c;")  # 红色表示未登录
+        
+        self.login_button = QPushButton("登录")
+        self.login_button.setFixedWidth(60)  # 设置固定宽度
+        self.login_button.clicked.connect(self.handle_login)
+        
+        # 账号信息
         self.login_avatar_label = QLabel()
-        self.login_avatar_label.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
+        self.login_avatar_label.setFixedSize(40, 40)
         self.login_avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.login_avatar_label.setFrameShape(QFrame.Shape.Box)
         self.login_avatar_label.setStyleSheet("border: 1px solid #dcdde1; border-radius: 4px;")
         self.login_avatar_label.setText("头像")
-        login_layout.addWidget(self.login_avatar_label)
         
-        # 登录账号名称
-        login_name_layout = QVBoxLayout()
-        login_name_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.login_name_label = QLabel("登录公众号名称")
         self.login_name_label.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
-        login_name_layout.addWidget(self.login_name_label)
-        login_layout.addLayout(login_name_layout)
+        
+        login_static_layout.addWidget(self.login_status_label)
+        login_static_layout.addWidget(self.login_button)
+
+        login_info_layout.addWidget(self.login_avatar_label)
+        login_info_layout.addWidget(self.login_name_label)
+
+        
+        login_layout.addLayout(login_info_layout)
+        login_layout.addLayout(login_static_layout)
+
         
         login_group.setLayout(login_layout)
-        account_info_layout.addWidget(login_group)
+        parent_layout.addWidget(login_group)
+    
+    def create_search_account_section(self, parent_layout):
+        """创建合并的公众号搜索和信息区域"""
+        # 统一的样式设置
+        GROUP_STYLE = """
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """
         
-        # 右侧：目标公众号信息
-        target_group = QGroupBox("公众号信息")
-        target_group.setFixedHeight(GROUP_HEIGHT)
-        target_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        target_layout = QHBoxLayout()
-        target_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
-        target_layout.setSpacing(SPACING)
+
+
+        search_group = QGroupBox("公众号文章搜索")
+        search_group.setStyleSheet(GROUP_STYLE)
+        search_layout = QVBoxLayout()
+        search_layout.setContentsMargins(10, 15, 10, 10)  # 增加内边距
+        search_layout.setSpacing(10)  # 增加控件间距
+
+        article_input_layout = QHBoxLayout()
+        article_input_layout.setSpacing(10)  # 增加控件间距
+
+        search_input_layout = QHBoxLayout()
+        search_input_layout.setSpacing(10)  # 增加控件间距
+
+        search_result_layout = QHBoxLayout()
+        search_result_layout.setSpacing(10)  # 增加控件间距
+
+
+        # 公众号文章链接
+        article_label = QLabel("公众号文章链接:")
+        article_label.setFont(QFont("Microsoft YaHei", 9))
+        article_input_layout.addWidget(article_label)
         
-        # 目标公众号头像和基本信息
-        left_layout = QHBoxLayout()
-        left_layout.setSpacing(SPACING)
+        self.article_input = QLineEdit()
+        self.article_input.setPlaceholderText("请输入要下载的微信公众号文章链接")
+        article_input_layout.addWidget(self.article_input)
+
+        self.article_input_button = QPushButton("下载")
+        self.article_input_button.clicked.connect(self.download_single_article)
+        article_input_layout.addWidget(self.article_input_button)
         
-        # 目标公众号头像
+        # 公众号名称
+        name_label = QLabel("公众号账号名称:")
+        name_label.setFont(QFont("Microsoft YaHei", 9))
+        search_input_layout.addWidget(name_label)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("请输入要搜索的微信公众号")
+        search_input_layout.addWidget(self.search_input)
+        
+        # 文章数量
+        count_label = QLabel("文章数量:")
+        count_label.setFont(QFont("Microsoft YaHei", 9))
+        search_input_layout.addWidget(count_label)
+        
+        self.search_count_input = QLineEdit("0")  # 默认为0表示搜索全部
+        self.search_count_input.setFixedWidth(60)
+        self.search_count_input.setToolTip("0表示搜索全部文章")
+        search_input_layout.addWidget(self.search_count_input)
+        
+        # 搜索按钮
+        self.search_button = QPushButton("搜索")
+        self.search_button.setFixedWidth(80)  # 设置固定宽度
+        self.search_button.clicked.connect(self.search_official_account)
+        search_input_layout.addWidget(self.search_button)
+        
+        # 公众号信息
         self.avatar_label = QLabel()
-        self.avatar_label.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
+        self.avatar_label.setFixedSize(40, 40)
         self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.avatar_label.setFrameShape(QFrame.Shape.Box)
         self.avatar_label.setStyleSheet("border: 1px solid #dcdde1; border-radius: 4px;")
         self.avatar_label.setText("头像")
-        left_layout.addWidget(self.avatar_label)
         
-        # 目标公众号名称和文章数
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(SPACING)
         self.account_name_label = QLabel("公众号名称")
         self.account_name_label.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
-        self.article_count_label = QLabel("文章总数: 0")
+        
+        self.article_count_label = QLabel("文章数: 0")
         self.article_count_label.setFont(QFont("Microsoft YaHei", 9))
         self.article_count_label.setStyleSheet("color: #666666;")
-        info_layout.addWidget(self.account_name_label)
-        info_layout.addWidget(self.article_count_label)
-        left_layout.addLayout(info_layout)
         
-        # 下载统计
-        right_layout = QHBoxLayout()
-        right_layout.setSpacing(SPACING * 3)  # 增加统计数字之间的间距
+        search_result_layout.addWidget(self.avatar_label)
+        search_result_layout.addWidget(self.account_name_label)
+        search_result_layout.addWidget(self.article_count_label)
         
-        # 下载成功数
-        success_layout = QVBoxLayout()
-        success_layout.setSpacing(2)
-        self.success_count_label = QLabel("下载成功")
-        self.success_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.success_count_label.setFont(QFont("Microsoft YaHei", 9))
-        self.success_count_value = QLabel("0")
-        self.success_count_value.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        self.success_count_value.setStyleSheet("color: #2ecc71;")
-        self.success_count_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        success_layout.addWidget(self.success_count_label)
-        success_layout.addWidget(self.success_count_value)
-        right_layout.addLayout(success_layout)
-        
-        # 下载失败数
-        failed_layout = QVBoxLayout()
-        failed_layout.setSpacing(2)
-        self.failed_count_label = QLabel("下载失败")
-        self.failed_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.failed_count_label.setFont(QFont("Microsoft YaHei", 9))
-        self.failed_count_value = QLabel("0")
-        self.failed_count_value.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        self.failed_count_value.setStyleSheet("color: #e74c3c;")
-        self.failed_count_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        failed_layout.addWidget(self.failed_count_label)
-        failed_layout.addWidget(self.failed_count_value)
-        right_layout.addLayout(failed_layout)
-        
-        # 将左右两侧添加到目标公众号布局
-        target_layout.addLayout(left_layout, 2)
-        target_layout.addStretch(1)  # 添加弹性空间
-        target_layout.addLayout(right_layout, 1)
-        
-        target_group.setLayout(target_layout)
-        account_info_layout.addWidget(target_group)
-        
-        # 将整个布局添加到父布局
-        parent_layout.addLayout(account_info_layout)
+        search_layout.addLayout(article_input_layout)
+        search_layout.addLayout(search_input_layout)
+        search_layout.addLayout(search_result_layout)
+        search_group.setLayout(search_layout)
+        parent_layout.addWidget(search_group)
     
     def create_article_list_section(self, parent_layout):
         """创建文章列表区域"""
+        # 统一样式设置
+        GROUP_STYLE = """
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """
+        
+        TABLE_STYLE = """
+            QTableWidget {
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                background-color: #ffffff;
+                gridline-color: #f0f0f0;
+                selection-background-color: #e8f0fe;
+                selection-color: #333333;
+            }
+            QTableWidget::item {
+                padding: 5px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QHeaderView::section {
+                background-color: #f5f5f5;
+                padding: 5px;
+                border: none;
+                border-right: 1px solid #e0e0e0;
+                border-bottom: 1px solid #e0e0e0;
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                color: #333333;
+            }
+        """
+        
+        # 按钮样式
+        SELECT_ALL_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #4CAF50;
+                border: 1px solid #3d8b40;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 22px;
+            }
+            QPushButton:hover {
+                background-color: #3d8b40;
+            }
+            QPushButton:pressed {
+                background-color: #2d6a30;
+            }
+        """
+        
+        DESELECT_ALL_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #f44336;
+                border: 1px solid #d32f2f;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 22px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:pressed {
+                background-color: #b71c1c;
+            }
+        """
+        
+        CHECK_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #2196F3;
+                border: 1px solid #1976D2;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 22px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+        """
+        
+        UNCHECK_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #f44336;
+                border: 1px solid #d32f2f;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 22px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:pressed {
+                background-color: #b71c1c;
+            }
+        """
+        
         list_group = QGroupBox("文章列表")
+        list_group.setStyleSheet(GROUP_STYLE)
         list_layout = QVBoxLayout()
+        list_layout.setContentsMargins(10, 15, 10, 10)  # 增加内边距
+        list_layout.setSpacing(10)  # 增加控件间距
         
         # 创建表格
         self.article_table = QTableWidget()
+        self.article_table.setStyleSheet(TABLE_STYLE)
         self.article_table.setColumnCount(7)
         self.article_table.setHorizontalHeaderLabels(["选择", "标题", "发布时间", "阅读数", "链接", "封面图片", "下载状态"])
+        self.article_table.setAlternatingRowColors(True)  # 交替行颜色
+        self.article_table.setShowGrid(True)  # 显示网格线
+        self.article_table.setGridStyle(Qt.PenStyle.SolidLine)  # 实线网格
         
         # 设置表格属性
         self.article_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -528,31 +671,53 @@ class WechatCollectorUI(QMainWindow):
         self.article_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.article_table.setColumnWidth(0, 50)
         self.article_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.article_table.setColumnWidth(1, 240)
         self.article_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         self.article_table.setColumnWidth(2, 150)
         self.article_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.article_table.setColumnWidth(3, 80)
         self.article_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.article_table.setColumnWidth(4, 120)
+        self.article_table.setColumnWidth(4, 200)
         self.article_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.article_table.setColumnWidth(5, 120)
+        self.article_table.setColumnWidth(5, 80)
         self.article_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.article_table.setColumnWidth(6, 100)
         
+        # 设置表格最小高度，增加文章列表显示空间
+        self.article_table.setMinimumHeight(500)  # 进一步增加高度
+        
+        # 启用滚动条
+        self.article_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.article_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        # 启用鼠标滚轮滚动
+        self.article_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.article_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        
         # 按钮布局
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)  # 设置按钮间距
         
+        # 创建按钮，大小为原来的60%
         self.select_all_btn = QPushButton("全选")
+        self.select_all_btn.setStyleSheet(SELECT_ALL_BUTTON_STYLE)
         self.select_all_btn.clicked.connect(self.select_all_articles)
+        self.select_all_btn.setFixedWidth(60)  # 设置固定宽度
         
         self.deselect_all_btn = QPushButton("全不选")
+        self.deselect_all_btn.setStyleSheet(DESELECT_ALL_BUTTON_STYLE)
         self.deselect_all_btn.clicked.connect(self.deselect_all_articles)
+        self.deselect_all_btn.setFixedWidth(60)  # 设置固定宽度
         
         self.check_selected_btn = QPushButton("选中")
+        self.check_selected_btn.setStyleSheet(CHECK_BUTTON_STYLE)
         self.check_selected_btn.clicked.connect(self.check_selected_articles)
+        self.check_selected_btn.setFixedWidth(60)  # 设置固定宽度
         
         self.uncheck_selected_btn = QPushButton("取消选中")
+        self.uncheck_selected_btn.setStyleSheet(UNCHECK_BUTTON_STYLE)
         self.uncheck_selected_btn.clicked.connect(self.uncheck_selected_articles)
+        self.uncheck_selected_btn.setFixedWidth(80)  # 设置固定宽度
         
         button_layout.addWidget(self.select_all_btn)
         button_layout.addWidget(self.deselect_all_btn)
@@ -560,70 +725,312 @@ class WechatCollectorUI(QMainWindow):
         button_layout.addWidget(self.uncheck_selected_btn)
         button_layout.addStretch(1)
         
-        list_layout.addWidget(self.article_table)
         list_layout.addLayout(button_layout)
+        list_layout.addWidget(self.article_table)
         
         list_group.setLayout(list_layout)
         parent_layout.addWidget(list_group)
     
-    def create_export_download_section(self, parent_layout):
-        """创建导出和下载设置区域"""
+    def create_export_section(self, parent_layout):
+        """创建导出设置区域"""
+        # 样式设置
+        GROUP_STYLE = """
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """
+        
+        INPUT_STYLE = """
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: #ffffff;
+                font-family: 'Microsoft YaHei';
+                min-height: 25px;
+            }
+        """
+        
+        BROWSE_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #607D8B;
+                border: 1px solid #455A64;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+            QPushButton:pressed {
+                background-color: #263238;
+            }
+        """
+        
+        EXPORT_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #9C27B0;
+                border: 1px solid #7B1FA2;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+            QPushButton:pressed {
+                background-color: #4A148C;
+            }
+        """
+        
+        # 创建底部布局
         bottom_layout = QHBoxLayout()
+        bottom_layout.setSpacing(15)  # 设置区域间距
         
-        # 导出设置
-        export_group = QGroupBox("列表导出设置")
+        # 导出设置区域
+        export_group = QGroupBox("导出设置")
+        export_group.setStyleSheet(GROUP_STYLE)
         export_layout = QVBoxLayout()
+        export_layout.setContentsMargins(10, 15, 10, 10)  # 增加内边距
+        export_layout.setSpacing(10)  # 增加控件间距
         
+        # 导出路径设置
         export_path_layout = QHBoxLayout()
-        export_path_layout.addWidget(QLabel("导出路径:"))
-        self.export_path_input = QLineEdit("./collection/default_account.xlsx")
+        export_path_layout.setSpacing(10)  # 设置控件间距
+        
+        export_path_label = QLabel("导出路径:")
+        export_path_label.setFont(QFont("Microsoft YaHei", 9))
+        export_path_layout.addWidget(export_path_label)
+        
+        self.export_path_input = QLineEdit("./列表导出")
+        self.export_path_input.setStyleSheet(INPUT_STYLE)
+        self.export_path_input.setMinimumWidth(200)  # 设置最小宽度
         export_path_layout.addWidget(self.export_path_input)
         
-        self.export_path_btn = QPushButton("选择路径")
+        self.export_path_btn = QPushButton("浏览")
+        self.export_path_btn.setStyleSheet(BROWSE_BUTTON_STYLE)
+        self.export_path_btn.setFixedWidth(60)  # 设置固定宽度
         self.export_path_btn.clicked.connect(self.select_export_path)
         export_path_layout.addWidget(self.export_path_btn)
         
-        self.export_btn = QPushButton("导出")
-        self.export_btn.clicked.connect(self.export_article_list)
-        
         export_layout.addLayout(export_path_layout)
-        export_layout.addWidget(self.export_btn)
+        
+        # 导出按钮
+        export_btn_layout = QHBoxLayout()
+        export_btn_layout.setSpacing(10)  # 设置控件间距
+        
+        self.export_btn = QPushButton("导出数据")
+        self.export_btn.setStyleSheet(EXPORT_BUTTON_STYLE)
+        # 缩小导出按钮宽度为原来的三分之一
+        self.export_btn.setFixedWidth(100)  # 设置固定宽度
+        self.export_btn.clicked.connect(self.export_article_list)
+        export_btn_layout.addWidget(self.export_btn)
+        export_btn_layout.addStretch(1)  # 添加弹性空间
+        
+        export_layout.addLayout(export_btn_layout)
         
         export_group.setLayout(export_layout)
         
-        # 下载设置
-        download_group = QGroupBox("文章下载设置")
-        download_layout = QVBoxLayout()
+        parent_layout.addWidget(export_group)
+    
+    def create_download_section(self, parent_layout):
+        """创建合并的下载设置和控制区域"""
+        # 样式设置
+        GROUP_STYLE = """
+            QGroupBox {
+                font-family: 'Microsoft YaHei';
+                font-weight: bold;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """
         
+        INPUT_STYLE = """
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 5px;
+                background-color: #ffffff;
+                font-family: 'Microsoft YaHei';
+                min-height: 25px;
+            }
+        """
+        
+        BROWSE_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #607D8B;
+                border: 1px solid #455A64;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+            QPushButton:pressed {
+                background-color: #263238;
+            }
+        """
+        
+        PROGRESS_BAR_STYLE = """
+            QProgressBar {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                text-align: center;
+                background-color: #f5f5f5;
+                min-height: 25px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 3px;
+            }
+        """
+        
+        DOWNLOAD_SELECTED_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #2196F3;
+                border: 1px solid #1976D2;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+        """
+        
+        DOWNLOAD_ALL_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #4CAF50;
+                border: 1px solid #388E3C;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:pressed {
+                background-color: #1B5E20;
+            }
+        """
+        
+        STOP_BUTTON_STYLE = """
+            QPushButton {
+                background-color: #F44336;
+                border: 1px solid #D32F2F;
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-family: 'Microsoft YaHei';
+                color: white;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:pressed {
+                background-color: #B71C1C;
+            }
+        """
+        
+        control_group = QGroupBox("下载设置和控制")
+        control_group.setStyleSheet(GROUP_STYLE)
+        control_layout = QVBoxLayout()
+        control_layout.setContentsMargins(10, 15, 10, 10)  # 增加内边距
+        control_layout.setSpacing(15)  # 增加控件间距
+        
+        # 下载路径
         download_path_layout = QHBoxLayout()
-        download_path_layout.addWidget(QLabel("下载路径:"))
-        self.download_path_input = QLineEdit("./download/default_account/")
+        download_path_layout.setSpacing(10)  # 设置控件间距
+        
+        download_path_label = QLabel("下载路径:")
+        download_path_label.setFont(QFont("Microsoft YaHei", 9))
+        download_path_layout.addWidget(download_path_label)
+        
+        self.download_path_input = QLineEdit("./文章原文")
+        self.download_path_input.setStyleSheet(INPUT_STYLE)
+        self.download_path_input.setMinimumWidth(200)  # 设置最小宽度
         download_path_layout.addWidget(self.download_path_input)
         
-        self.download_path_btn = QPushButton("选择路径")
+        self.download_path_btn = QPushButton("浏览")
+        self.download_path_btn.setStyleSheet(BROWSE_BUTTON_STYLE)
+        self.download_path_btn.setFixedWidth(60)  # 设置固定宽度
         self.download_path_btn.clicked.connect(self.select_download_path)
         download_path_layout.addWidget(self.download_path_btn)
         
-        download_buttons_layout = QHBoxLayout()
-        self.download_btn = QPushButton("下载")
-        self.download_btn.clicked.connect(self.download_articles)
+        control_layout.addLayout(download_path_layout)
         
-        self.stop_download_btn = QPushButton("停止")
+        # 创建进度条
+        progress_layout = QHBoxLayout()
+        progress_layout.setSpacing(10)  # 设置控件间距
+        
+        progress_label = QLabel("下载进度:")
+        progress_label.setFont(QFont("Microsoft YaHei", 9))
+        progress_layout.addWidget(progress_label)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet(PROGRESS_BAR_STYLE)
+        self.progress_bar.setTextVisible(True)  # 显示进度文本
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 文本居中
+        progress_layout.addWidget(self.progress_bar)
+        
+        # 创建按钮布局
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)  # 设置按钮间距
+        
+        self.download_selected_btn = QPushButton("下载选中文章")
+        self.download_selected_btn.setStyleSheet(DOWNLOAD_SELECTED_BUTTON_STYLE)
+        self.download_selected_btn.clicked.connect(self.download_selected_articles)
+        
+        self.download_all_btn = QPushButton("下载全部文章")
+        self.download_all_btn.setStyleSheet(DOWNLOAD_ALL_BUTTON_STYLE)
+        self.download_all_btn.clicked.connect(self.download_all_articles)
+        
+        self.stop_download_btn = QPushButton("停止下载")
+        self.stop_download_btn.setStyleSheet(STOP_BUTTON_STYLE)
         self.stop_download_btn.clicked.connect(self.stop_download)
-        self.stop_download_btn.setEnabled(False)
-        download_buttons_layout.addWidget(self.download_btn)
-        download_buttons_layout.addWidget(self.stop_download_btn)
         
-        download_layout.addLayout(download_path_layout)
-        download_layout.addLayout(download_buttons_layout)
+        button_layout.addWidget(self.download_selected_btn)
+        button_layout.addWidget(self.download_all_btn)
+        button_layout.addWidget(self.stop_download_btn)
+        button_layout.addStretch(1)
         
-        download_group.setLayout(download_layout)
+        # 添加到控制布局
+        control_layout.addLayout(progress_layout)
+        control_layout.addLayout(button_layout)
         
-        # 将导出和下载区域添加到底部布局
-        bottom_layout.addWidget(export_group)
-        bottom_layout.addWidget(download_group)
-        
-        parent_layout.addLayout(bottom_layout)
+        control_group.setLayout(control_layout)
+        parent_layout.addWidget(control_group)
     
     def check_login_status(self):
         """检查登录状态，如果未登录则显示登录对话框"""
@@ -659,6 +1066,7 @@ class WechatCollectorUI(QMainWindow):
         self.search_input.setEnabled(False)
         self.search_count_input.setEnabled(False)
         self.search_button.setEnabled(False)
+        self.article_table.setEnabled(False)
         self.select_all_btn.setEnabled(False)
         self.deselect_all_btn.setEnabled(False)
         self.check_selected_btn.setEnabled(False)
@@ -668,14 +1076,21 @@ class WechatCollectorUI(QMainWindow):
         self.export_btn.setEnabled(False)
         self.download_path_input.setEnabled(False)
         self.download_path_btn.setEnabled(False)
-        self.download_btn.setEnabled(False)
-        self.stop_download_btn.setEnabled(False)
+        
+        # 检查下载控制按钮是否已创建
+        if hasattr(self, 'download_selected_btn'):
+            self.download_selected_btn.setEnabled(False)
+        if hasattr(self, 'download_all_btn'):
+            self.download_all_btn.setEnabled(False)
+        if hasattr(self, 'stop_download_btn'):
+            self.stop_download_btn.setEnabled(False)
     
     def enable_all_features(self):
         """启用所有功能"""
         self.search_input.setEnabled(True)
         self.search_count_input.setEnabled(True)
         self.search_button.setEnabled(True)
+        self.article_table.setEnabled(True)
         self.select_all_btn.setEnabled(True)
         self.deselect_all_btn.setEnabled(True)
         self.check_selected_btn.setEnabled(True)
@@ -685,7 +1100,14 @@ class WechatCollectorUI(QMainWindow):
         self.export_btn.setEnabled(True)
         self.download_path_input.setEnabled(True)
         self.download_path_btn.setEnabled(True)
-        self.download_btn.setEnabled(True)
+        
+        # 检查下载控制按钮是否已创建
+        if hasattr(self, 'download_selected_btn'):
+            self.download_selected_btn.setEnabled(True)
+        if hasattr(self, 'download_all_btn'):
+            self.download_all_btn.setEnabled(True)
+        if hasattr(self, 'stop_download_btn'):
+            self.stop_download_btn.setEnabled(False)  # 初始状态下停止按钮禁用
     
     def show_login_dialog(self):
         """显示登录对话框"""
@@ -991,8 +1413,8 @@ class WechatCollectorUI(QMainWindow):
         
     def update_export_download_paths(self, account_name):
         """更新导出和下载路径"""
-        self.export_path_input.setText(f"./export/{account_name}.xlsx")
-        self.download_path_input.setText(f"./download/{account_name}/")
+        self.export_path_input.setText(f"./列表导出/{account_name}.xlsx")
+        self.download_path_input.setText(f"./文章原文/{account_name}/")
     
     def select_all_articles(self):
         """全选文章"""
@@ -1136,7 +1558,8 @@ class WechatCollectorUI(QMainWindow):
             self.download_manager.add_article(article)
         
         # 更新UI状态
-        self.download_btn.setEnabled(False)
+        self.download_selected_btn.setEnabled(False)
+        self.download_all_btn.setEnabled(False)
         self.stop_download_btn.setEnabled(True)
         
         # 开始下载
@@ -1144,6 +1567,17 @@ class WechatCollectorUI(QMainWindow):
         
         # 更新状态栏
         self.statusBar.showMessage(f"开始下载 {len(articles_to_download)} 篇文章...")
+    
+    def download_selected_articles(self):
+        """下载选中的文章"""
+        self.download_articles()
+    
+    def download_all_articles(self):
+        """下载全部文章"""
+        # 先全选所有文章
+        self.select_all_articles()
+        # 然后调用下载方法
+        self.download_articles()
     
     def stop_download(self):
         """停止下载"""
@@ -1164,7 +1598,8 @@ class WechatCollectorUI(QMainWindow):
     
     def on_download_completed(self):
         """所有下载完成后的处理"""
-        self.download_btn.setEnabled(True)
+        self.download_selected_btn.setEnabled(True)
+        self.download_all_btn.setEnabled(True)
         self.stop_download_btn.setEnabled(False)
         
         # 统计下载结果
@@ -1184,6 +1619,62 @@ class WechatCollectorUI(QMainWindow):
         # 显示完成消息
         QMessageBox.information(self, "下载完成", 
                                f"文章下载完成\n成功: {success_count}篇\n失败: {fail_count}篇\n\n文件保存在: {self.download_path_input.text()}")
+    
+    def download_single_article(self):
+        """下载单篇文章"""
+        article_url = self.article_input.text().strip()
+        if not article_url:
+            QMessageBox.warning(self, "提示", "请输入微信公众号文章链接")
+            return
+        
+        # 验证URL格式
+        if not article_url.startswith("http"):
+            QMessageBox.warning(self, "提示", "请输入有效的微信公众号文章链接")
+            return
+        
+        # 获取下载路径
+        download_path = self.download_path_input.text().strip()
+        if not download_path:
+            download_path = "./文章原文"
+        
+        # 更新状态栏
+        self.statusBar.showMessage("正在准备下载文章...")
+        
+        # 创建下载线程
+        self.single_article_thread = QThread()
+        self.single_article_downloader = SingleArticleDownloader(article_url, download_path)
+        self.single_article_downloader.moveToThread(self.single_article_thread)
+        
+        # 连接信号
+        self.single_article_thread.started.connect(self.single_article_downloader.download)
+        self.single_article_downloader.download_complete.connect(self.on_single_article_download_complete)
+        self.single_article_downloader.download_error.connect(self.on_single_article_download_error)
+        self.single_article_downloader.download_progress.connect(self.update_status_message)
+        
+        # 启动线程
+        self.single_article_thread.start()
+    
+    def on_single_article_download_complete(self, file_path):
+        """单篇文章下载完成的回调"""
+        self.statusBar.showMessage(f"文章下载完成: {file_path}")
+        QMessageBox.information(self, "下载成功", f"文章已保存到: {file_path}")
+        
+        # 清理线程
+        self.single_article_thread.quit()
+        self.single_article_thread.wait()
+    
+    def on_single_article_download_error(self, error_message):
+        """单篇文章下载出错的回调"""
+        self.statusBar.showMessage(f"下载失败: {error_message}")
+        QMessageBox.warning(self, "下载失败", error_message)
+        
+        # 清理线程
+        self.single_article_thread.quit()
+        self.single_article_thread.wait()
+    
+    def update_status_message(self, message):
+        """更新状态栏消息"""
+        self.statusBar.showMessage(message)
     
 # 主程序
 if __name__ == "__main__":
@@ -1209,36 +1700,3 @@ if __name__ == "__main__":
     # 检查登录状态并可能显示登录对话框
     window.check_login_status()
     sys.exit(app.exec())
-    
-    # 右侧：统计信息
-    stats_layout = QHBoxLayout()
-    stats_layout.setSpacing(10)  # 统一间距
-    
-    # 文章总数
-    article_count_layout = QVBoxLayout()
-    article_count_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 垂直居中
-    self.article_count_label = QLabel("文章总数: 0")
-    self.article_count_label.setFont(QFont("Microsoft YaHei", 9))  # 统一字体
-    self.article_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 居中对齐
-    article_count_layout.addWidget(self.article_count_label)
-    stats_layout.addLayout(article_count_layout)
-    
-    # 成功数量
-    success_count_layout = QVBoxLayout()
-    success_count_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 垂直居中
-    self.success_count_label = QLabel("成功: 0")
-    self.success_count_label.setFont(QFont("Microsoft YaHei", 9))  # 统一字体
-    self.success_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 居中对齐
-    success_count_layout.addWidget(self.success_count_label)
-    stats_layout.addLayout(success_count_layout)
-    
-    # 失败数量
-    failed_count_layout = QVBoxLayout()
-    failed_count_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 垂直居中
-    self.failed_count_label = QLabel("失败: 0")
-    self.failed_count_label.setFont(QFont("Microsoft YaHei", 9))  # 统一字体
-    self.failed_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 居中对齐
-    failed_count_layout.addWidget(self.failed_count_label)
-    stats_layout.addLayout(failed_count_layout)
-    
-    target_layout.addLayout(stats_layout)
