@@ -1,28 +1,126 @@
-import os
 import uuid
 import bcrypt
 import getpass
 import platform
 import uuid
 import json
+import os
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 import supabase
+from dotenv import load_dotenv
+
+# 导入配置加密工具
+try:
+    from utils.config_crypto import decrypt_config
+except ImportError:
+    # 如果导入失败，尝试添加父目录到路径
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.config_crypto import decrypt_config
 
 class UserDatabaseManager:
     """用户数据库管理器"""
     
-    def __init__(self):
-        """初始化"""
-        # 从环境变量获取Supabase配置
-        self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_KEY')
+    def __init__(self, show_errors=False):
+        """初始化
+        
+        Args:
+            show_errors: 是否显示错误信息，默认为False
+        """
+        # 初始化配置变量
+        self.supabase_url = None
+        self.supabase_key = None
+        self.database_url = None
+        self.config_error = False
+        
+        try:
+            # 获取应用程序所在目录
+            if getattr(sys, 'frozen', False):
+                # 打包后的应用
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                # 开发环境
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            
+            # 加载config.json配置文件（唯一配置来源）
+            config_path = os.path.join(base_dir, 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        encrypted_config = json.load(f)
+                        # 解密配置
+                        config = decrypt_config(encrypted_config)
+                        self.supabase_url = config.get('SUPABASE_URL')
+                        self.supabase_key = config.get('SUPABASE_KEY')
+                        self.database_url = config.get('DATABASE_URL')
+                    if show_errors:
+                        print("已从config.json加载并解密配置")
+                except Exception as e:
+                    if show_errors:
+                        print(f"读取或解密config.json出错: {str(e)}")
+                    self.config_error = True
+            else:
+                if show_errors:
+                    print(f"配置文件不存在: {config_path}")
+                self.config_error = True
+            
+            # 如果仍然没有配置，使用默认值
+            if not self.supabase_url or not self.supabase_key:
+                if show_errors:
+                    print("警告: 未找到有效的Supabase配置")
+                    print("请在应用程序目录下创建config.json文件，包含加密后的配置")
+                
+                # 标记配置错误
+                self.config_error = True
+                
+                # 使用默认值（这些值不会实际工作，但可以让应用程序启动）
+                self.supabase_url = "https://your-project-url.supabase.co"
+                self.supabase_key = "your-supabase-key"
+        
+        except Exception as e:
+            if show_errors:
+                print(f"加载配置时出错: {str(e)}")
+            
+            # 标记配置错误
+            self.config_error = True
+            
+            self.supabase_url = "https://your-project-url.supabase.co"
+            self.supabase_key = "your-supabase-key"
         
         # 初始化Supabase客户端
-        self.supabase = supabase.create_client(self.supabase_url, self.supabase_key)
+        try:
+            self.supabase = supabase.create_client(self.supabase_url, self.supabase_key)
+            if show_errors:
+                print("Supabase客户端初始化成功")
+        except Exception as e:
+            if show_errors:
+                print(f"Supabase客户端初始化失败: {str(e)}")
+            
+            # 标记配置错误
+            self.config_error = True
+            
+            # 创建一个空的客户端对象，避免程序崩溃
+            self.supabase = None
         
         # MAC地址存储路径
         self.mac_store_path = os.path.join(os.path.expanduser("~"), ".gzh_mac_store.json")
+    
+    def has_config_error(self):
+        """检查是否存在配置错误
+        
+        Returns:
+            bool: 是否存在配置错误
+        """
+        return self.config_error
+    
+    def get_database_url(self):
+        """获取数据库URL
+        
+        Returns:
+            str: 数据库URL，如果不存在则返回None
+        """
+        return self.database_url
     
     def _hash_password(self, password):
         """对密码进行哈希处理

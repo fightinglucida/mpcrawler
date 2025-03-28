@@ -55,11 +55,11 @@ class UserApp(QMainWindow):
         self.setup_db_downloader()
         
         # 检查环境变量
-        self.check_environment()
+        # self.check_environment()
         
         # 默认选择用户中心选项卡并自动弹出登录界面
-        self.tab_widget.setCurrentIndex(1)
-        QTimer.singleShot(500, self.auto_show_login)
+        self.tab_widget.setCurrentIndex(0)
+        QTimer.singleShot(200, self.auto_show_login)
         
         # 连接标签页切换信号
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
@@ -798,6 +798,14 @@ class UserCenterPanel(QWidget):
             if updated_user['success']:
                 self.current_user = updated_user['user']
                 self.login_status_changed.emit(True, self.current_user)
+                
+            # 启用公众号采集页面的功能
+            try:
+                main_window = self.parent().parent()  # 获取主窗口 UserApp 实例
+                if hasattr(main_window, 'enable_collector_features'):
+                    main_window.enable_collector_features()
+            except Exception as e:
+                print(f"启用公众号采集功能出错: {str(e)}")
                 
             # 在消息标签中显示激活成功信息
             self.message_label.setText(f"激活成功，账号有效期至: {expiry_display}")
