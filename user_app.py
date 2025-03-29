@@ -65,28 +65,11 @@ class UserApp(QMainWindow):
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
     
     def auto_show_login(self):
-        """自动显示登录界面或尝试自动登录"""
-        # 尝试通过MAC地址自动登录
-        db_manager = UserDatabaseManager()
-        result = db_manager.auto_login_by_mac()
-        
-        if result['success']:
-            # 自动登录成功
-            self.user_center.on_login_success(result['user'])
-            # 在状态栏显示提示信息
-            self.status_bar.showMessage("已通过设备识别自动登录", 5000)  # 显示5秒
-            
-            # 检查用户激活状态，如果已激活则自动切换到公众号采集页面
-            if result['user'].get('activation_status') == '已激活':
-                QTimer.singleShot(1000, lambda: self.switch_to_collector(True))
-            else:
-                # 未激活状态，禁用公众号采集页面
-                self.disable_collector_features()
-        else:
-            # 自动登录失败，显示登录对话框
-            self.user_center.show_login_dialog()
-            # 禁用公众号采集页面
-            self.disable_collector_features()
+        """自动显示登录界面"""
+        # 直接显示登录对话框
+        self.user_center.show_login_dialog()
+        # 禁用公众号采集页面
+        self.disable_collector_features()
     
     def on_login_status_changed(self, is_logged_in, user_info):
         """用户登录状态变化回调"""
@@ -268,6 +251,11 @@ class UserCenterPanel(QWidget):
             }
             QPushButton:pressed {
                 background-color: #d0d0d0;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                border: 1px solid #9E9E9E;
+                color: #757575;
             }
             QLineEdit {
                 border: 1px solid #d0d0d0;

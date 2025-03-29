@@ -232,34 +232,13 @@ class UserDatabaseManager:
             if not self._verify_password(password, user.get('password', '')):
                 return {'success': False, 'message': '密码错误', 'user': None}
             
-            # 获取当前MAC地址
-            current_mac = self._get_current_mac()
             user_id = user.get('id')
             
-            # 检查用户是否有MAC地址
-            user_mac = user.get('mac')
-            if not user_mac:
-                # 首次登录，更新MAC地址
-                self.supabase.table('users').update({
-                    'mac': current_mac,
-                    'last_login_time': datetime.now().isoformat(),
-                    'last_login_ip': self._get_ip_address()
-                }).eq('id', user_id).execute()
-                
-                # 重新获取用户信息
-                result = self.supabase.table('users').select('*').eq('id', user_id).execute()
-                if result.data:
-                    user = result.data[0]
-            else:
-                # 验证MAC地址
-                if user_mac != current_mac:
-                    return {'success': False, 'message': '登录失败，请不要更换设备使用', 'user': None}
-                
-                # 更新登录时间和IP
-                self.supabase.table('users').update({
-                    'last_login_time': datetime.now().isoformat(),
-                    'last_login_ip': self._get_ip_address()
-                }).eq('id', user_id).execute()
+            # 更新登录时间和IP
+            self.supabase.table('users').update({
+                'last_login_time': datetime.now().isoformat(),
+                'last_login_ip': self._get_ip_address()
+            }).eq('id', user_id).execute()
             
             return {'success': True, 'message': '登录成功', 'user': user}
             
