@@ -3,7 +3,7 @@ import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QMessageBox, 
                              QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QPushButton, QGroupBox, QFormLayout, QFrame,
-                             QGridLayout, QDialog)
+                             QGridLayout, QDialog, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QPixmap
 from datetime import datetime
@@ -14,6 +14,7 @@ from mp_downloader import WechatCollectorUI
 from utils.db_article_downloader import DBArticleDownloadManager
 from models.user_database import UserDatabaseManager
 from models.user_manager import RegisterDialog
+from utils.config_manager import ConfigManager
 
 class UserApp(QMainWindow):
     """用户版本的公众号采集助手"""
@@ -35,6 +36,9 @@ class UserApp(QMainWindow):
         
         # 创建数据库管理器
         self.db_manager = UserDatabaseManager()
+        
+        # 创建配置管理器
+        self.config_manager = ConfigManager()
         
         # 创建选项卡部件
         self.tab_widget = QTabWidget()
@@ -58,24 +62,39 @@ class UserApp(QMainWindow):
         # self.check_environment()
         
         # 默认选择用户中心选项卡并自动弹出登录界面
-        self.tab_widget.setCurrentIndex(0)
+        self.tab_widget.setCurrentIndex(1)
         QTimer.singleShot(200, self.auto_show_login)
         
         # 连接标签页切换信号
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
     
     def auto_show_login(self):
-        """自动显示登录界面"""
-        # 直接显示登录对话框
-        self.user_center.show_login_dialog()
-        # 禁用公众号采集页面
-        self.disable_collector_features()
+        """自动显示登录界面或尝试自动登录"""
+        # 检查是否配置了自动登录
+        login_info = self.config_manager.get_login_info()
+        
+        if login_info.get('auto_login') and login_info.get('email') and login_info.get('password'):
+            print("检测到自动登录配置，准备自动登录...")
+            # 显示登录对话框，并在其中执行自动登录
+            login_dialog = self.user_center.show_login_dialog()
+            
+            # 确保登录对话框显示出来，然后才执行自动登录
+            QTimer.singleShot(100, lambda: print("登录对话框已显示，准备执行自动登录"))
+            
+            # 在登录成功后，对话框会自动关闭，并触发 login_success 信号
+            # 该信号会调用 on_login_status_changed 方法，在其中处理激活状态
+            # 这里不需要额外处理
+        else:
+            # 没有配置自动登录，直接显示登录对话框
+            self.user_center.show_login_dialog()
     
     def on_login_status_changed(self, is_logged_in, user_info):
         """用户登录状态变化回调"""
         if is_logged_in and user_info:
             # 用户登录成功，可以在这里更新UI或进行其他操作
             print(f"用户登录成功: {user_info.get('nickname', '')}")
+            print(f"用户信息: {user_info}")
+            print(f"激活状态: {user_info.get('activation_status')}")
             
             # 更新状态栏
             self.status_bar.showMessage(f"用户已登录: {user_info.get('nickname', '')}")
@@ -83,15 +102,18 @@ class UserApp(QMainWindow):
             # 更新下载管理器的用户ID
             if hasattr(self.collector_ui, 'download_manager') and isinstance(self.collector_ui.download_manager, DBArticleDownloadManager):
                 self.collector_ui.download_manager.set_user_id(user_info.get('id'))
-                
+                print(f"更新下载管理器的用户ID: {user_info.get('id')}")
                 # 如果用户已激活，启用保存到数据库功能
                 if user_info.get('activation_status') == '已激活':
                     self.collector_ui.download_manager.set_save_to_db(True)
+                    self.enable_collector_features()
                     # 启用公众号采集页面并自动切换
                     self.switch_to_collector(True)
+                    print("用户已激活，启用公众号采集，并切换到公众号采集页面")
                 else:
                     # 未激活状态，禁用公众号采集页面
                     self.disable_collector_features()
+                    print(f"用户未激活，禁用公众号采集页面，激活状态: {user_info.get('activation_status')}")
         else:
             # 用户退出登录
             print("用户已退出登录")
@@ -508,6 +530,7 @@ class UserCenterPanel(QWidget):
         login_dialog = LoginDialog(self)
         login_dialog.login_success.connect(self.on_login_success)
         login_dialog.exec()
+        return login_dialog
     
     def on_login_success(self, user_info):
         """登录成功回调"""
@@ -850,12 +873,29 @@ class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.db_manager = UserDatabaseManager()
+        
+        # 导入配置管理器
+        self.config_manager = ConfigManager()
+        
         self.setup_ui()
+        
+        # 加载保存的登录信息
+        self.load_login_info()
+        
+        # 如果配置了自动登录，则自动执行登录
+        if self.auto_login_checkbox.isChecked() and self.email_input.text() and self.password_input.text():
+            # 显示正在登录的提示
+            self.status_label.setText("正在自动登录中...")
+            # 禁用登录和注册按钮
+            self.login_button.setEnabled(False)
+            self.register_button.setEnabled(False)
+            # 延迟执行登录，以便用户可以看到登录界面
+            QTimer.singleShot(1500, self.login)
     
     def setup_ui(self):
         """设置界面"""
         self.setWindowTitle("用户登录")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(400, 350)
         self.setStyleSheet("""
             QDialog {
                 background-color: #f8f9fa;
@@ -898,6 +938,10 @@ class LoginDialog(QDialog):
                 font-family: 'Microsoft YaHei';
                 color: #333333;
             }
+            QCheckBox {
+                font-family: 'Microsoft YaHei';
+                color: #333333;
+            }
         """)
         
         layout = QVBoxLayout()
@@ -927,7 +971,22 @@ class LoginDialog(QDialog):
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         form_layout.addWidget(self.password_input, 1, 1)
         
+        # 添加自动登录和记住密码选项
+        checkbox_layout = QHBoxLayout()
+        checkbox_layout.setSpacing(10)
+        
+        self.remember_password_checkbox = QCheckBox("记住密码")
+        self.auto_login_checkbox = QCheckBox("自动登录")
+        
+        # 自动登录依赖于记住密码，当记住密码取消选中时，自动登录也应该取消选中
+        self.remember_password_checkbox.stateChanged.connect(self.on_remember_password_changed)
+        
+        checkbox_layout.addWidget(self.remember_password_checkbox)
+        checkbox_layout.addWidget(self.auto_login_checkbox)
+        checkbox_layout.addStretch()
+        
         layout.addLayout(form_layout)
+        layout.addLayout(checkbox_layout)
         
         # 按钮布局
         button_layout = QHBoxLayout()
@@ -988,6 +1047,40 @@ class LoginDialog(QDialog):
         
         self.setLayout(layout)
     
+    def on_remember_password_changed(self, state):
+        """记住密码选项变化时的处理"""
+        # 如果取消选中记住密码，则自动登录也取消选中
+        if state == 0:  # Qt.Unchecked
+            self.auto_login_checkbox.setChecked(False)
+            self.auto_login_checkbox.setEnabled(False)
+        else:
+            self.auto_login_checkbox.setEnabled(True)
+    
+    def load_login_info(self):
+        """加载保存的登录信息"""
+        try:
+            login_info = self.config_manager.get_login_info()
+            
+            # 设置记住密码和自动登录选项
+            self.remember_password_checkbox.setChecked(login_info['remember_password'])
+            self.auto_login_checkbox.setChecked(login_info['auto_login'])
+            
+            # 如果记住密码，则填充邮箱和密码
+            if login_info['remember_password']:
+                self.email_input.setText(login_info['email'])
+                self.password_input.setText(login_info['password'])
+                
+                # 如果没有选中自动登录，则禁用自动登录选项
+                if not login_info['auto_login']:
+                    self.auto_login_checkbox.setEnabled(True)
+                else:
+                    self.auto_login_checkbox.setEnabled(True)
+            else:
+                # 如果没有记住密码，则禁用自动登录选项
+                self.auto_login_checkbox.setEnabled(False)
+        except Exception as e:
+            print(f"加载登录信息时出错: {str(e)}")
+    
     def login(self):
         """登录"""
         email = self.email_input.text().strip()
@@ -1001,13 +1094,67 @@ class LoginDialog(QDialog):
             QMessageBox.warning(self, "提示", "请输入密码")
             return
         
+        # 更新状态
+        self.status_label.setText("正在登录，请稍候...")
+        self.login_button.setEnabled(False)
+        self.register_button.setEnabled(False)
+        
         # 登录
         result = self.db_manager.login(email, password)
         
+        # 恢复按钮状态
+        self.login_button.setEnabled(True)
+        self.register_button.setEnabled(True)
+        
         if result['success']:
-            self.login_success.emit(result['user'])
-            self.accept()
+            # 保存登录信息
+            remember_password = self.remember_password_checkbox.isChecked()
+            auto_login = self.auto_login_checkbox.isChecked()
+            
+            self.config_manager.save_login_info(
+                email=email,
+                password=password,
+                remember_password=remember_password,
+                auto_login=auto_login
+            )
+            
+            # 登录成功
+            self.status_label.setText("登录成功！")
+            
+            # 获取用户信息，确保包含最新的激活状态
+            user_info = result['user']
+            print(f"登录成功，用户信息: {user_info}")
+            print(f"激活状态: {user_info.get('activation_status')}")
+            
+            # 发送登录成功信号
+            self.login_success.emit(user_info)
+            
+            # 检查用户激活状态
+            if user_info.get('activation_status') == '已激活':
+                print("用户已激活，准备启用公众号采集页面")
+                # 如果已激活，延迟关闭登录对话框并切换到公众号采集页面
+                QTimer.singleShot(500, self.accept)
+                
+                # 获取主窗口并切换到公众号采集页面
+                try:
+                    main_window = self.parent().parent()
+                    if hasattr(main_window, 'enable_collector_features'):
+                        # 先启用公众号采集页面功能
+                        main_window.enable_collector_features()
+                        print("已调用 enable_collector_features 方法")
+                    
+                    if hasattr(main_window, 'switch_to_collector'):
+                        # 然后切换到公众号采集页面
+                        QTimer.singleShot(1000, lambda: main_window.switch_to_collector(True))
+                        print("已设置延时调用 switch_to_collector 方法")
+                except Exception as e:
+                    print(f"切换到公众号采集页面出错: {str(e)}")
+            else:
+                # 如果未激活，直接关闭登录对话框
+                self.accept()
+                print("用户未激活，不启用公众号采集页面")
         else:
+            self.status_label.setText("登录失败")
             QMessageBox.warning(self, "登录失败", result['message'])
     
     def show_register_dialog(self):
